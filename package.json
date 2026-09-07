@@ -1,0 +1,27 @@
+{
+  "name": "pi-railway-controller",
+  "version": "0.1.0",
+  "description": "Central controller for a LEGO layout: 12V block-controlled trains + 4.5V autonomous shuttle coordination",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test:ui-smoke": "node scripts/smoke-test-ui.js",
+    "test:authoring-smoke": "node scripts/smoke-test-authoring.js"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.21.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0",
+    "node-fetch": "^2.7.0"
+  },
+  "optionalDependencies": {
+    "onoff": "^6.0.3"
+  }
+}

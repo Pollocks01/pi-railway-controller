@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Layout Control</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-title">
+    <span class="eyebrow">LEGO RAILWAY</span>
+    <h1>Layout Control</h1>
+  </div>
+  <div class="topbar-status">
+    <span id="gpioModeLabel" class="chip chip-muted">–</span>
+    <span class="ws-indicator" id="wsIndicator">
+      <span class="led" id="wsLed"></span>
+      <span id="wsLabel">connecting…</span>
+    </span>
+  </div>
+</header>
+
+<main id="app">
+  <section class="section" id="section-12v">
+    <div class="section-title-row">
+      <h2 class="section-title">12V Loops</h2>
+      <button type="button" class="btn btn-tiny" id="addTrack12vBtn">+ Add Loop</button>
+    </div>
+    <div class="card-grid" id="tracks12vGrid"></div>
+  </section>
+
+  <section class="section" id="section-45v">
+    <div class="section-title-row">
+      <h2 class="section-title">4.5V Shuttle Lines</h2>
+      <button type="button" class="btn btn-tiny" id="addTrack45vBtn">+ Add Shuttle Line</button>
+    </div>
+    <div class="card-grid" id="tracks45vGrid"></div>
+  </section>
+
+  <section class="section" id="section-unassigned" hidden>
+    <h2 class="section-title">Unassigned Shuttles</h2>
+    <div class="card-grid" id="unassignedGrid"></div>
+  </section>
+
+  <div class="modal-overlay" id="modalOverlay" hidden>
+    <div class="modal">
+      <h3 class="modal-title" id="modalTitle"></h3>
+      <form id="modalForm" class="modal-form"></form>
+      <div class="modal-actions">
+        <button type="button" class="btn" id="modalCancelBtn">Cancel</button>
+        <button type="submit" form="modalForm" class="btn btn-primary" id="modalSubmitBtn">Add</button>
+      </div>
+      <div class="modal-error" id="modalError" hidden></div>
+    </div>
+  </div>
+
+  <section class="section" id="section-network">
+    <details class="network-panel">
+      <summary class="section-title network-summary">
+        Network Settings
+        <span class="chip" id="networkModeChip">–</span>
+      </summary>
+
+      <div class="network-body">
+        <p class="network-hint">
+          The physical AP/home-network switch is read once at boot. Save
+          credentials for both here, flip the switch, then reboot below --
+          changes never apply live.
+        </p>
+
+        <div class="network-grid">
+          <fieldset class="network-fieldset">
+            <legend>Show network (AP mode)</legend>
+            <label class="field-label">SSID
+              <input type="text" id="netApSsid" autocomplete="off">
+            </label>
+            <label class="field-label">Password <span class="hint-inline">(blank = open network)</span>
+              <input type="password" id="netApPassword" autocomplete="off">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Home network (maintenance / STA mode)</legend>
+            <label class="field-label">SSID
+              <input type="text" id="netStaSsid" autocomplete="off">
+            </label>
+            <label class="field-label">Password
+              <input type="password" id="netStaPassword" autocomplete="off">
+            </label>
+          </fieldset>
+        </div>
+
+        <div class="network-actions">
+          <button type="button" class="btn" id="netSaveBtn">Save network settings</button>
+          <span id="netSaveResult" class="mono network-save-result"></span>
+        </div>
+
+        <div class="network-actions reboot-row">
+          <button type="button" class="btn btn-danger" id="netRebootBtn">Reboot Pi</button>
+          <button type="button" class="btn btn-danger" id="netShutdownBtn">Shut Down Pi</button>
+          <span class="network-hint">Last applied: <span id="netLastApplied" class="mono">–</span></span>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <div class="empty-state" id="emptyState" hidden>
+    <p>No layout configured yet.</p>
+    <p class="empty-state-sub">Use the <strong>+ Add Loop</strong> / <strong>+ Add Shuttle Line</strong> buttons above to get started.</p>
+  </div>
+</main>
+
+<footer class="footer">
+  <span id="footerStarted"></span>
+  <span class="footer-sep">·</span>
+  <span>Manual overrides here bypass automation — they're for wiring checks and demos, not the show itself.</span>
+</footer>
+
+<template id="tpl-track12v">
+  <article class="card card-loop">
+    <div class="card-head">
+      <div>
+        <h3 class="card-title"></h3>
+        <span class="card-sub topology"></span>
+      </div>
+      <div class="card-head-actions">
+        <span class="badge mode-badge">MANUAL</span>
+        <button type="button" class="btn btn-tiny btn-ghost-danger delete-track-btn" title="Delete this loop">✕</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <label class="field-label">Mode
+        <select class="mode-select"></select>
+      </label>
+      <button type="button" class="btn btn-danger stop-btn">Stop</button>
+    </div>
+
+    <div class="slider-block">
+      <div class="slider-row">
+        <input type="range" min="-100" max="100" value="0" step="1" class="speed-slider">
+        <span class="speed-readout mono">0</span>
+      </div>
+      <div class="slider-scale"><span>−100</span><span>0</span><span>+100</span></div>
+    </div>
+
+    <div class="zone-list"></div>
+    <div class="card-footer-row">
+      <button type="button" class="btn btn-tiny add-zone-btn">+ Add Zone</button>
+      <button type="button" class="btn btn-tiny add-train-btn">+ Add Train</button>
+    </div>
+    <div class="train-list mono"></div>
+  </article>
+</template>
+
+<template id="tpl-zone-row">
+  <div class="zone-row">
+    <div class="zone-row-main">
+      <span class="led zone-power-led"></span>
+      <span class="zone-name"></span>
+      <span class="signal-led" hidden></span>
+      <button type="button" class="btn btn-tiny btn-ghost-danger delete-zone-btn" title="Delete this zone">✕</button>
+    </div>
+    <div class="zone-row-telemetry mono">
+      <span class="zone-occupied-chip chip"></span>
+      <span class="zone-speed"></span>
+      <span class="zone-station chip"></span>
+    </div>
+    <div class="zone-row-actions">
+      <button type="button" class="btn btn-tiny zone-force-on">Force ON</button>
+      <button type="button" class="btn btn-tiny zone-force-off">Force OFF</button>
+      <span class="sensor-sim-buttons"></span>
+      <button type="button" class="btn btn-tiny add-sensor-btn">+ Sensor</button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-track45v">
+  <article class="card card-shuttle-line">
+    <div class="card-head">
+      <div>
+        <h3 class="card-title"></h3>
+        <span class="card-sub">Shuttle line</span>
+      </div>
+      <button type="button" class="btn btn-tiny btn-ghost-danger delete-track-btn" title="Delete this shuttle line">✕</button>
+    </div>
+
+    <div class="ends-row">
+      <div class="end-block" data-end="west">
+        <div class="end-head">
+          <span class="led end-led"></span>
+          <span class="end-label">WEST</span>
+          <span class="end-occupancy-chip chip"></span>
+        </div>
+        <div class="end-sensor-name mono"></div>
+        <button type="button" class="btn btn-tiny end-sim-btn">Simulate arrival</button>
+        <button type="button" class="btn btn-tiny end-clear-btn">Simulate departure</button>
+        <button type="button" class="btn btn-tiny add-location-sensor-btn">+ Location sensor</button>
+        <div class="junction-list"></div>
+        <button type="button" class="btn btn-tiny add-junction-btn">+ Junction</button>
+      </div>
+      <div class="end-block" data-end="east">
+        <div class="end-head">
+          <span class="led end-led"></span>
+          <span class="end-label">EAST</span>
+          <span class="end-occupancy-chip chip"></span>
+        </div>
+        <div class="end-sensor-name mono"></div>
+        <button type="button" class="btn btn-tiny end-sim-btn">Simulate arrival</button>
+        <button type="button" class="btn btn-tiny end-clear-btn">Simulate departure</button>
+        <button type="button" class="btn btn-tiny add-location-sensor-btn">+ Location sensor</button>
+        <div class="junction-list"></div>
+        <button type="button" class="btn btn-tiny add-junction-btn">+ Junction</button>
+      </div>
+    </div>
+
+    <div class="shuttle-list"></div>
+    <div class="assign-row" hidden>
+      <label class="field-label">Assign a shuttle
+        <select class="assign-select"></select>
+      </label>
+      <button type="button" class="btn btn-tiny assign-btn">Assign</button>
+    </div>
+  </article>
+</template>
+
+<template id="tpl-junction-row">
+  <div class="junction-row">
+    <span class="junction-name mono"></span>
+    <span class="junction-position chip"></span>
+    <div class="junction-actions">
+      <button type="button" class="btn btn-tiny junction-throw-a">Through</button>
+      <button type="button" class="btn btn-tiny junction-throw-b">Diverge</button>
+    </div>
+  </div>
+</template>
+
+<template id="tpl-shuttle-block">
+  <div class="shuttle-block">
+    <div class="shuttle-block-head">
+      <span class="led shuttle-online-led"></span>
+      <input type="text" class="shuttle-name-input" />
+      <button type="button" class="btn btn-tiny shuttle-rename-btn" hidden>Save</button>
+    </div>
+    <div class="shuttle-telemetry mono"></div>
+    <div class="control-row">
+      <label class="field-label">Mode
+        <select class="shuttle-mode-select">
+          <option value="MANUAL">Manual</option>
+          <option value="SHUTTLE">Shuttle</option>
+          <option value="CONTINUE">Continue</option>
+        </select>
+      </label>
+      <button type="button" class="btn btn-danger shuttle-stop-btn">Stop</button>
+    </div>
+    <div class="slider-block">
+      <div class="slider-row">
+        <input type="range" min="-100" max="100" value="0" step="1" class="shuttle-speed-slider">
+        <span class="speed-readout mono">0</span>
+      </div>
+      <div class="slider-scale"><span>−100</span><span>0</span><span>+100</span></div>
+    </div>
+  </div>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>
