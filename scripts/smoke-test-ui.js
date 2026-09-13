@@ -50,6 +50,9 @@ async function main() {
     'zone rows rendered': doc.querySelectorAll('.zone-row').length,
     'shuttle line card rendered': doc.querySelectorAll('.card-shuttle-line').length,
     'junction rows rendered': doc.querySelectorAll('.junction-row').length,
+    'sensor numbers visible': [...doc.querySelectorAll('.sensor-number')].some((el) => el.textContent.includes('#')),
+    'signal numbers visible': [...doc.querySelectorAll('.signal-chip')].some((el) => el.textContent.includes('#')),
+    'junction hardware info visible': [...doc.querySelectorAll('.junction-driver')].some((el) => el.textContent.includes('Driver')),
     'gpio mode label set': doc.getElementById('gpioModeLabel')?.textContent,
     'empty state hidden': doc.getElementById('emptyState')?.hidden,
   };

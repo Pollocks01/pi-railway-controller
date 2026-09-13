@@ -139,6 +139,7 @@ const Sensors = {
   },
   remove(id) {
     this.get(id);
+    db.prepare('DELETE FROM signals WHERE sensor_id = ?').run(id);
     db.prepare('DELETE FROM sensors WHERE id = ?').run(id);
   },
 };
@@ -299,8 +300,11 @@ const Signals = {
       const sensor = Sensors.get(sensorId);
       assert(sensor.role === 'station', 'signals may only be attached to station sensors');
     }
-    const existing = db.prepare('SELECT id FROM signals WHERE signal_number = ?').get(signalNumber);
+
+    db.prepare('DELETE FROM signals WHERE sensor_id IS NULL').run();
+    const existing = db.prepare('SELECT id FROM signals WHERE sensor_id IS NOT NULL AND signal_number = ?').get(signalNumber);
     assert(!existing, `signal_number ${signalNumber} is already in use`);
+
     const id = uuidv4();
     db.prepare('INSERT INTO signals (id, signal_number, name, sensor_id) VALUES (?, ?, ?, ?)').run(
       id,

@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS signals (
   id              TEXT PRIMARY KEY,
   signal_number   INTEGER NOT NULL UNIQUE,   -- numbered signal slot (owns a fixed GPIO pair)
   name            TEXT NOT NULL,
-  sensor_id       TEXT REFERENCES sensors(id) ON DELETE SET NULL
+  sensor_id       TEXT REFERENCES sensors(id) ON DELETE CASCADE
 );
 
 -- 12V trains tagged to a starting zone, so position can be tracked once a

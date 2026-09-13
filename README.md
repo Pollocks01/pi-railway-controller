@@ -54,6 +54,7 @@ for real hardware activity.
    `gpio/pinMap.js` -- `NETWORK_MODE_SWITCH_PINS`). Enable internal
    pull-ups on both pins by adding this line to `/boot/firmware/config.txt`
    and rebooting once:
+
    ```
    gpio=2,3=pu
    ```
@@ -100,7 +101,6 @@ for real hardware activity.
    Covers both the "Reboot Pi" and "Shut Down Pi" buttons in the UI --
    unlike reboot, shutdown has no remote way back; the UI's confirmation
    dialog says so explicitly before calling it.
-
 6. Run the main server as a systemd service so it survives reboots/crashes
    at an exhibition:
 
@@ -123,7 +123,6 @@ for real hardware activity.
    ```bash
    sudo systemctl enable --now railway-controller
    ```
-
 7. The web UI is served from the Pi itself at `http://192.168.4.1/` when
    in AP mode (or whatever address it gets on your home network in STA
    mode) — **no internet connectivity is required or used**, which matters
@@ -332,6 +331,7 @@ signal, not just a momentary trigger -- worth using, not throwing away.
 
 `shuttle-coordination/shuttleEvents.js` tracks two deliberately separate
 pieces of runtime state per shuttle line as a result:
+
 - **`lastKnownEnd`** -- the last end the shuttle was seen at. Persists
   through a departure (never cleared by `onClear`), because junction
   routing depends on it: even mid-transit, "which end will the shuttle
@@ -506,6 +506,7 @@ currently parked in this siding" -- no dead-reckoning needed for that
 specific position, unlike mid-loop occupancy which is always inferred.
 
 Implications for the redesign:
+
 - The siding-end sensor should be read as a **level** (raw HIGH/LOW via
   `ObstacleSensor.readRaw()`, which already exists but isn't polled by
   anything today), not only as an edge trigger. Likely needs a small
