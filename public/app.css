@@ -139,6 +139,10 @@ body {
 .signal-led.aspect-green { background: var(--signal-green); box-shadow: 0 0 6px 1px rgba(74, 222, 128, 0.6); }
 .signal-led.aspect-red { background: var(--signal-red); box-shadow: 0 0 6px 1px rgba(239, 68, 68, 0.6); }
 
+.signal-chip {
+  margin-left: 0.35rem;
+}
+
 /* ---------------------------------------------------------------------
    Layout
 --------------------------------------------------------------------- */
@@ -218,6 +222,16 @@ body {
 .chip-muted { color: var(--text-faint); }
 .chip-active { color: var(--mono-accent); border-color: var(--mono-accent); }
 .chip-warn { color: var(--signal-amber); border-color: var(--signal-amber); }
+
+.hardware-chip,
+.sensor-number,
+.signal-chip,
+.junction-driver {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  padding: 0.18rem 0.45rem;
+}
 
 .badge {
   font-family: var(--font-mono);
@@ -304,6 +318,10 @@ select:focus, input[type="text"]:focus {
 }
 .train-list { font-size: 0.72rem; color: var(--text-faint); margin-top: 0.4rem; }
 .train-list .train-entry { display: block; }
+
+[hidden] {
+  display: none !important;
+}
 
 /* ---------------------------------------------------------------------
    Modal (config authoring)
@@ -407,8 +425,29 @@ input[type="range"]::-moz-range-thumb {
 .zone-name { font-weight: 600; font-size: 0.88rem; }
 .zone-row-telemetry { display: flex; gap: 0.4rem; align-items: center; margin-bottom: 0.5rem; font-size: 0.75rem; flex-wrap: wrap; }
 .zone-speed { color: var(--mono-accent); }
-.zone-row-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
-.sensor-sim-buttons { display: inline-flex; gap: 0.4rem; flex-wrap: wrap; }
+.zone-row-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: stretch;
+  width: 100%;
+}
+
+.zone-row-actions > .zone-force-on,
+.zone-row-actions > .zone-force-off {
+  align-self: flex-start;
+}
+
+.sensor-sim-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.zone-row-actions > .add-sensor-btn {
+  align-self: flex-start;
+}
 
 /* ---------------------------------------------------------------------
    Shuttle line ends + junctions
@@ -427,7 +466,69 @@ input[type="range"]::-moz-range-thumb {
 }
 .end-head { display: flex; align-items: center; gap: 0.45rem; margin-bottom: 0.3rem; }
 .end-label { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.08em; color: var(--text-dim); }
-.end-sensor-name { font-size: 0.72rem; color: var(--text-faint); margin-bottom: 0.5rem; }
+.end-sensor-name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  color: var(--text-faint);
+  margin-bottom: 0.5rem;
+}
+
+.sensor-chip-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+}
+
+.sensor-row,
+.signal-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.sensor-row {
+  justify-content: space-between;
+  width: 100%;
+}
+
+.sensor-row .sensor-number {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sensor-row .btn {
+  flex: 0 0 auto;
+}
+
+.signal-row {
+  justify-content: flex-start;
+  padding-left: 0.15rem;
+}
+
+.signal-row .signal-chip {
+  margin-left: 0;
+}
+
+.junction-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.junction-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
 .junction-list { margin-top: 0.6rem; display: flex; flex-direction: column; gap: 0.4rem; }
 .junction-row {
   display: flex;

@@ -19,7 +19,11 @@ router.get('/', (req, res) => {
 function computeInventory() {
   const usedZoneDriverNumbers = new Set(db.prepare('SELECT driver_number FROM zones').all().map((r) => r.driver_number));
   const usedSensorNumbers = new Set(Sensors.listAll().map((s) => s.sensor_number));
-  const usedSignalNumbers = new Set(Signals.list().map((s) => s.signal_number));
+  const usedSignalNumbers = new Set(
+    Signals.list()
+      .filter((signal) => signal.sensor_id !== null)
+      .map((signal) => signal.signal_number)
+  );
   const usedJunctionSlots = new Set(
     db.prepare('SELECT driver_number, driver_channel FROM junctions').all().map((r) => `${r.driver_number}:${r.driver_channel}`)
   );

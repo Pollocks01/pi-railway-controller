@@ -512,7 +512,6 @@ function buildTracks12v(tracks, signals) {
       const occupiedChip = zoneNode.querySelector('.zone-occupied-chip');
       const speedEl = zoneNode.querySelector('.zone-speed');
       const stationChip = zoneNode.querySelector('.zone-station');
-      const signalLed = zoneNode.querySelector('.signal-led');
 
       const forceOnBtn = zoneNode.querySelector('.zone-force-on');
       const forceOffBtn = zoneNode.querySelector('.zone-force-off');
@@ -532,8 +531,16 @@ function buildTracks12v(tracks, signals) {
 
       const simButtonsEl = zoneNode.querySelector('.sensor-sim-buttons');
       for (const sensor of zone.sensors) {
-        const wrap = document.createElement('span');
+        const wrap = document.createElement('div');
         wrap.className = 'sensor-chip-group';
+
+        const sensorRow = document.createElement('div');
+        sensorRow.className = 'sensor-row';
+
+        const sensorNumberChip = document.createElement('span');
+        sensorNumberChip.className = 'sensor-number chip mono';
+        sensorNumberChip.textContent = `Sensor #${sensor.sensor_number}`;
+        sensorRow.appendChild(sensorNumberChip);
 
         const btn = document.createElement('button');
         btn.type = 'button';
@@ -543,7 +550,7 @@ function buildTracks12v(tracks, signals) {
           'click',
           withBusyFeedback(btn, () => postJson(`/api/diagnostics/sensors/${sensor.id}/simulate`, {}))
         );
-        wrap.appendChild(btn);
+        sensorRow.appendChild(btn);
 
         const deleteSensorBtn = document.createElement('button');
         deleteSensorBtn.type = 'button';
@@ -553,16 +560,32 @@ function buildTracks12v(tracks, signals) {
         deleteSensorBtn.addEventListener('click', () =>
           confirmAndDelete(`Delete sensor "${sensor.name}"?`, `/api/tracks-12v/sensors/${sensor.id}`)
         );
-        wrap.appendChild(deleteSensorBtn);
+        sensorRow.appendChild(deleteSensorBtn);
 
-        // A signal may be attached to this sensor -- if so, this zone's
-        // single signal-led slot represents it. (A zone practically has at
-        // most one station sensor with a signal in the current model.)
-        const matchingSignal = signals.find((sig) => sig.sensor_id === sensor.id);
-        if (matchingSignal) {
-          signalLed.hidden = false;
-          signalEls.set(matchingSignal.id, signalLed);
-        } else if (sensor.role === 'station') {
+        wrap.appendChild(sensorRow);
+
+        const attachedSignals = signals.filter((sig) => sig.sensor_id === sensor.id);
+        for (const signal of attachedSignals) {
+          const signalRow = document.createElement('div');
+          signalRow.className = 'signal-row';
+
+          const signalLed = document.createElement('span');
+          signalLed.className = 'signal-led';
+          signalLed.hidden = true;
+          signalLed.title = `Signal #${signal.signal_number}`;
+          signalRow.appendChild(signalLed);
+
+          const signalChip = document.createElement('span');
+          signalChip.className = 'signal-chip chip mono';
+          signalChip.textContent = `Signal #${signal.signal_number}`;
+          signalChip.hidden = false;
+          signalRow.appendChild(signalChip);
+
+          wrap.appendChild(signalRow);
+          signalEls.set(signal.id, signalLed);
+        }
+
+        if (attachedSignals.length === 0 && sensor.role === 'station') {
           const addSignalBtn = document.createElement('button');
           addSignalBtn.type = 'button';
           addSignalBtn.className = 'btn btn-tiny';
@@ -574,7 +597,7 @@ function buildTracks12v(tracks, signals) {
         simButtonsEl.appendChild(wrap);
       }
 
-      zoneEls.set(zone.id, { row: zoneNode, powerLed, occupiedChip, speedEl, stationChip, signalLed });
+      zoneEls.set(zone.id, { row: zoneNode, powerLed, occupiedChip, speedEl, stationChip });
       zoneList.appendChild(zoneNode);
     }
 
@@ -612,6 +635,10 @@ function buildTracks45v(tracks, allShuttles) {
       const sensor = track.sensors.find((s) => s.end_of_line === endName);
       if (sensor) {
         sensorNameEl.textContent = sensor.name;
+        const sensorNumberChip = document.createElement('span');
+        sensorNumberChip.className = 'hardware-chip chip mono';
+        sensorNumberChip.textContent = `Sensor #${sensor.sensor_number}`;
+        sensorNameEl.appendChild(sensorNumberChip);
         simBtn.hidden = false;
         clearBtn.hidden = false;
         addSensorBtn.hidden = true;
@@ -656,6 +683,11 @@ function buildTracks45v(tracks, allShuttles) {
           'click',
           withBusyFeedback(throwB, () => postJson(`/api/diagnostics/junctions/${junction.id}/throw`, { direction: 'b' }))
         );
+        const driverChip = document.createElement('span');
+        driverChip.className = 'junction-driver chip mono';
+        driverChip.textContent = `Driver ${junction.driver_number}, Ch ${junction.driver_channel}`;
+        jNode.querySelector('.junction-actions').prepend(driverChip);
+
         const deleteJunctionBtn = document.createElement('button');
         deleteJunctionBtn.type = 'button';
         deleteJunctionBtn.className = 'btn btn-tiny btn-ghost-danger';
@@ -805,13 +837,16 @@ function applyZoneTelemetry(trackId, zoneId, zone) {
   if (!els || !zone) return;
 
   els.powerLed.className = 'led zone-power-led ' + (zone.powered ? 'on-green' : '');
-  els.occupiedChip.textContent = zone.occupied ? 'occupied' : 'clear';
-  els.occupiedChip.className = 'zone-occupied-chip chip' + (zone.occupied ? ' chip-active' : '');
-  els.speedEl.textContent = `${zone.appliedSpeed ?? 0}%`;
 
-  const station = zone.stationAction || 'none';
+  const occupied = zone.occupied ? 'occupied' : 'clear';
+  const speedText = `${zone.appliedSpeed ?? 0}%`;
+  const station = (zone.stationAction || 'none') === 'none' ? 'idle' : zone.stationAction;
+
+  els.occupiedChip.textContent = occupied;
+  els.occupiedChip.className = 'zone-occupied-chip chip' + (zone.occupied ? ' chip-active' : '');
+  els.speedEl.textContent = speedText;
   els.stationChip.textContent = station;
-  els.stationChip.className = 'zone-station chip' + (station !== 'none' ? ' chip-warn' : '');
+  els.stationChip.className = 'zone-station chip' + (station !== 'idle' ? ' chip-warn' : '');
 }
 
 function applyShuttleTrackTelemetry(shuttleTrackId, trackState) {
