@@ -2,6 +2,7 @@
 
 const { Shuttles } = require('../config/configStore');
 const runtimeState = require('../config/runtimeState');
+const { pushProfileTo } = require('./shuttleConfigProfile');
 
 /**
  * Handles the shuttle's boot-time POST /register. Registration is
@@ -17,6 +18,13 @@ function registerShuttle({ ipAddress, macAddress, firmwareVersion }) {
   runtimeState.updateShuttle(shuttle.id, {
     online: true,
     ipAddress: shuttle.ip_address,
+  });
+  // Sync the Pi's central 4.5V settings profile onto the shuttle every time
+  // it (re)registers -- it's a "slave" of the Pi's settings, not configured
+  // independently. Fire-and-forget: a slow/unreachable shuttle shouldn't
+  // fail registration itself.
+  pushProfileTo(shuttle.id).catch((err) => {
+    console.error(`[registry] failed to push settings profile to newly-registered shuttle ${shuttle.id}:`, err.message);
   });
   return shuttle;
 }

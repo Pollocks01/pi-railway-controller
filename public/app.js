@@ -93,10 +93,10 @@ function numberOptions(numbers, labelPrefix) {
 
 function triggerAddTrack12v() {
   openModal({
-    title: 'Add 12V Loop',
-    submitLabel: 'Add Loop',
+    title: 'Add 12V Layout',
+    submitLabel: 'Add Layout',
     fields: [
-      { name: 'name', label: 'Name', type: 'text', required: true, defaultValue: 'New 12V Loop' },
+      { name: 'name', label: 'Name', type: 'text', required: true, defaultValue: 'New 12V Layout' },
       {
         name: 'topology',
         label: 'Topology',
@@ -139,28 +139,37 @@ async function triggerAddZone(track) {
   });
 }
 
-async function triggerAddSensor12v(trackId, zone) {
+async function triggerAddSensor12v(track, zone) {
   const inventory = await getInventory();
+  const roleOptions = [
+    { value: 'station', label: 'Station stop' },
+    { value: 'block-entry', label: 'Block entry' },
+  ];
+  // 'end-of-line' sensors are added via the track's ends-row instead (see
+  // triggerAddEndSensor12v) -- same place the 4.5V shuttle line's location
+  // sensors are added, since both need an east/west designation.
   openModal({
     title: `Add Sensor to ${zone.name}`,
     submitLabel: 'Add Sensor',
     fields: [
       { name: 'name', label: 'Name', type: 'text', required: true, defaultValue: 'New sensor' },
+      { name: 'role', label: 'Role', type: 'select', options: roleOptions },
       {
-        name: 'role',
-        label: 'Role',
+        name: 'edge',
+        label: 'Trigger edge (which end of the train fires it)',
         type: 'select',
         options: [
-          { value: 'station', label: 'Station stop' },
-          { value: 'block-entry', label: 'Block entry' },
+          { value: 'leading', label: 'Leading edge (default -- front of train arrives)' },
+          { value: 'trailing', label: 'Trailing edge (back of train clears)' },
         ],
       },
       { name: 'sensorNumber', label: 'Sensor #', type: 'select', options: numberOptions(inventory.availableSensorNumbers, 'Sensor') },
     ],
     onSubmit: (data) =>
-      postJson(`/api/tracks-12v/${trackId}/zones/${zone.id}/sensors`, {
+      postJson(`/api/tracks-12v/${track.id}/zones/${zone.id}/sensors`, {
         name: data.name,
         role: data.role,
+        edge: data.edge,
         sensorNumber: Number(data.sensorNumber),
       }),
   });
@@ -227,6 +236,67 @@ async function triggerAddJunction(track, end) {
     onSubmit: (data) => {
       const [driverNumber, channel] = data.slot.split(':').map(Number);
       return postJson(`/api/tracks-45v/${track.id}/junctions`, {
+        name: data.name,
+        end,
+        driverNumber,
+        driverChannel: channel,
+        moveDurationMs: Number(data.moveDurationMs),
+        routeWeight: Number(data.routeWeight),
+      });
+    },
+  });
+}
+
+async function triggerAddEndSensor12v(track, end) {
+  const inventory = await getInventory();
+  // Same simplification as the shuttle line: one end-of-line sensor per
+  // physical end. Auto-picks the zone at that end of the length track
+  // (west -> first zone, east -> last zone) rather than asking, since the
+  // 4.5V equivalent doesn't have a zone concept to ask about at all.
+  const zone = end === 'west' ? track.zones[0] : track.zones[track.zones.length - 1];
+  if (!zone) {
+    alert('Add at least one zone to this track before adding an end sensor.');
+    return;
+  }
+  openModal({
+    title: `Add ${end.toUpperCase()} End Sensor`,
+    submitLabel: 'Add Sensor',
+    fields: [
+      { name: 'name', label: 'Name', type: 'text', required: true, defaultValue: `${end} end sensor` },
+      { name: 'sensorNumber', label: 'Sensor #', type: 'select', options: numberOptions(inventory.availableSensorNumbers, 'Sensor') },
+    ],
+    onSubmit: (data) =>
+      postJson(`/api/tracks-12v/${track.id}/zones/${zone.id}/sensors`, {
+        name: data.name,
+        role: 'end-of-line',
+        endOfLine: end,
+        edge: 'leading',
+        sensorNumber: Number(data.sensorNumber),
+      }),
+  });
+}
+
+async function triggerAddJunction12v(track, end) {
+  const inventory = await getInventory();
+  const slotOptions =
+    inventory.availableJunctionSlots.length === 0
+      ? [{ value: '', label: '(none free -- delete something first)' }]
+      : inventory.availableJunctionSlots.map((s) => ({
+          value: `${s.driverNumber}:${s.channel}`,
+          label: `Driver ${s.driverNumber}, Channel ${s.channel}`,
+        }));
+  openModal({
+    title: `Add Junction at ${end.toUpperCase()} end`,
+    submitLabel: 'Add Junction',
+    fields: [
+      { name: 'name', label: 'Name', type: 'text', required: true, defaultValue: `${end} junction` },
+      { name: 'slot', label: 'Driver / channel', type: 'select', options: slotOptions },
+      { name: 'moveDurationMs', label: 'Move duration (ms)', type: 'number', min: 100, defaultValue: 200 },
+      { name: 'routeWeight', label: 'Route weight', type: 'number', min: 0.1, defaultValue: 1 },
+    ],
+    onSubmit: (data) => {
+      const [driverNumber, channel] = data.slot.split(':').map(Number);
+      return postJson(`/api/tracks-12v/${track.id}/junctions`, {
         name: data.name,
         end,
         driverNumber,
@@ -321,6 +391,8 @@ async function boot() {
     buildTracks12v(tracks12v, signals);
     buildTracks45v(tracks45v, shuttles);
     buildUnassignedShuttles(tracks45v, shuttles);
+    await initSettingsPanel();
+    await initShuttle45vSettingsPanel();
     await initNetworkPanel();
 
     await Promise.all(tracks12v.map((t) => syncTrackControlState(t.id)));
@@ -336,6 +408,96 @@ async function boot() {
     console.error(err);
     document.getElementById('app').innerHTML = `<p style="padding:2rem;color:#ef4444">Failed to load layout: ${err.message}</p>`;
   }
+}
+
+// ---------------------------------------------------------------------
+// Controller settings panel
+// ---------------------------------------------------------------------
+
+async function initSettingsPanel() {
+  const fields = [
+    ['settingsDwellMsMin', 'track12vDwellMsMin'],
+    ['settingsDwellMsMax', 'track12vDwellMsMax'],
+    ['settingsStationLockoutMs', 'track12vStationLockoutMs'],
+    ['settingsSensorDebounceMs', 'track12vSensorDebounceMs'],
+    ['settingsRampStepPercent', 'track12vRampStepPercent'],
+    ['settingsRampStepIntervalMs', 'track12vRampStepIntervalMs'],
+    ['settingsTrain12vMinMotorPercent', 'track12vMinMotorPercent'],
+    ['settingsTrain12vMaxMotorPercent', 'track12vMaxMotorPercent'],
+    ['settingsJunctionDefaultMoveDurationMs', 'junctionDefaultMoveDurationMs'],
+    ['settingsSignalBrightnessPercent', 'signalBrightnessPercent'],
+  ];
+
+  const saveBtn = document.getElementById('settingsSaveBtn');
+  const saveResultEl = document.getElementById('settingsSaveResult');
+
+  const loadSettings = async () => {
+    const settings = await getJson('/api/settings');
+    for (const [id, key] of fields) {
+      const el = document.getElementById(id);
+      if (el) el.value = settings[key] ?? '';
+    }
+  };
+
+  await loadSettings();
+
+  saveBtn.addEventListener(
+    'click',
+    withBusyFeedback(saveBtn, async () => {
+      saveResultEl.textContent = '';
+      const payload = {};
+      for (const [id, key] of fields) {
+        const el = document.getElementById(id);
+        payload[key] = Number(el.value);
+      }
+      await postJson('/api/settings', payload);
+      saveResultEl.textContent = 'Saved';
+    })
+  );
+}
+
+// ---------------------------------------------------------------------
+// 4.5V shuttle settings panel -- Pi-side profile pushed to every shuttle
+// ---------------------------------------------------------------------
+
+async function initShuttle45vSettingsPanel() {
+  const fields = [
+    ['settings45vDwellMsMin', 'shuttle45vDwellMsMin'],
+    ['settings45vDwellMsMax', 'shuttle45vDwellMsMax'],
+    ['settings45vHallDebounceMs', 'shuttle45vHallDebounceMs'],
+    ['settings45vStationLockoutMs', 'shuttle45vStationLockoutMs'],
+    ['settings45vRampStepPercent', 'shuttle45vRampStepPercent'],
+    ['settings45vRampStepIntervalMs', 'shuttle45vRampStepIntervalMs'],
+    ['settings45vMinSpeedPercent', 'shuttle45vMinSpeedPercent'],
+    ['settings45vDefaultOperatingSpeed', 'shuttle45vDefaultOperatingSpeed'],
+    ['settings45vHeadlightBrightness', 'shuttle45vHeadlightBrightness'],
+  ];
+
+  const saveBtn = document.getElementById('settings45vSaveBtn');
+  const saveResultEl = document.getElementById('settings45vSaveResult');
+
+  const settings = await getJson('/api/settings');
+  for (const [id, key] of fields) {
+    const el = document.getElementById(id);
+    if (el) el.value = settings[key] ?? '';
+  }
+
+  saveBtn.addEventListener(
+    'click',
+    withBusyFeedback(saveBtn, async () => {
+      saveResultEl.textContent = '';
+      const payload = {};
+      for (const [id, key] of fields) {
+        const el = document.getElementById(id);
+        payload[key] = Number(el.value);
+      }
+      await postJson('/api/settings', payload);
+      const { results } = await postJson('/api/shuttles/config/push-all', {});
+      const failed = results.filter((r) => !r.ok);
+      saveResultEl.textContent =
+        failed.length === 0 ? `Saved, pushed to ${results.length} shuttle(s)` : `Saved, ${failed.length}/${results.length} shuttle(s) failed to sync`;
+    })
+  );
 }
 
 // ---------------------------------------------------------------------
@@ -443,6 +605,7 @@ function buildTracks12v(tracks, signals) {
   const grid = document.getElementById('tracks12vGrid');
   const tpl = document.getElementById('tpl-track12v');
   const zoneTpl = document.getElementById('tpl-zone-row');
+  const junctionTpl = document.getElementById('tpl-junction-row');
 
   for (const track of tracks) {
     const node = tpl.content.firstElementChild.cloneNode(true);
@@ -527,10 +690,12 @@ function buildTracks12v(tracks, signals) {
       zoneNode.querySelector('.delete-zone-btn').addEventListener('click', () =>
         confirmAndDelete(`Delete zone "${zone.name}" and its sensors?`, `/api/tracks-12v/${track.id}/zones/${zone.id}`)
       );
-      zoneNode.querySelector('.add-sensor-btn').addEventListener('click', () => triggerAddSensor12v(track.id, zone));
+      zoneNode.querySelector('.add-sensor-btn').addEventListener('click', () => triggerAddSensor12v(track, zone));
 
       const simButtonsEl = zoneNode.querySelector('.sensor-sim-buttons');
-      for (const sensor of zone.sensors) {
+      // End-of-line sensors are shown in the track's ends-row instead (same
+      // place/labels as the 4.5V shuttle line's location sensors), not here.
+      for (const sensor of zone.sensors.filter((s) => s.role !== 'end-of-line')) {
         const wrap = document.createElement('div');
         wrap.className = 'sensor-chip-group';
 
@@ -545,7 +710,8 @@ function buildTracks12v(tracks, signals) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'btn btn-tiny';
-        btn.textContent = `Simulate ${sensor.role === 'station' ? 'station' : 'entry'}`;
+        btn.textContent = `Simulate ${sensor.role === 'station' ? 'station' : sensor.role === 'end-of-line' ? 'end of line' : 'entry'}`;
+        btn.title = sensor.edge === 'trailing' ? 'Fires the trailing edge (back of train clears)' : 'Fires the leading edge (front of train arrives)';
         btn.addEventListener(
           'click',
           withBusyFeedback(btn, () => postJson(`/api/diagnostics/sensors/${sensor.id}/simulate`, {}))
@@ -585,7 +751,7 @@ function buildTracks12v(tracks, signals) {
           signalEls.set(signal.id, signalLed);
         }
 
-        if (attachedSignals.length === 0 && sensor.role === 'station') {
+        if (attachedSignals.length === 0 && (sensor.role === 'station' || sensor.role === 'end-of-line')) {
           const addSignalBtn = document.createElement('button');
           addSignalBtn.type = 'button';
           addSignalBtn.className = 'btn btn-tiny';
@@ -599,6 +765,97 @@ function buildTracks12v(tracks, signals) {
 
       zoneEls.set(zone.id, { row: zoneNode, powerLed, occupiedChip, speedEl, stationChip });
       zoneList.appendChild(zoneNode);
+    }
+
+    // Ends-row: only for 'length' tracks, mirrors the 4.5V shuttle line's
+    // ends-row exactly (same labels, same arrival/departure buttons, same
+    // junction list) -- see triggerAddEndSensor12v/triggerAddJunction12v.
+    if (track.topology === 'length') {
+      const endsRow = node.querySelector('.ends-row');
+      endsRow.hidden = false;
+      const ends = { west: {}, east: {} };
+      for (const endName of ['west', 'east']) {
+        const endBlock = endsRow.querySelector(`.end-block[data-end="${endName}"]`);
+        const led = endBlock.querySelector('.end-led');
+        const occupancyChip = endBlock.querySelector('.end-occupancy-chip');
+        const sensorNameEl = endBlock.querySelector('.end-sensor-name');
+        const simBtn = endBlock.querySelector('.end-sim-btn');
+        const clearBtn = endBlock.querySelector('.end-clear-btn');
+        const addSensorBtn = endBlock.querySelector('.add-location-sensor-btn');
+
+        const sensor = track.zones.flatMap((z) => z.sensors).find((s) => s.role === 'end-of-line' && s.end_of_line === endName);
+        if (sensor) {
+          sensorNameEl.textContent = sensor.name;
+          const sensorNumberChip = document.createElement('span');
+          sensorNumberChip.className = 'hardware-chip chip mono';
+          sensorNumberChip.textContent = `Sensor #${sensor.sensor_number}`;
+          sensorNameEl.appendChild(sensorNumberChip);
+          simBtn.hidden = false;
+          clearBtn.hidden = false;
+          addSensorBtn.hidden = true;
+          simBtn.addEventListener(
+            'click',
+            withBusyFeedback(simBtn, () => postJson(`/api/diagnostics/sensors/${sensor.id}/simulate-arrival`, {}))
+          );
+          clearBtn.addEventListener(
+            'click',
+            withBusyFeedback(clearBtn, () => postJson(`/api/diagnostics/sensors/${sensor.id}/simulate-departure`, {}))
+          );
+          const deleteSensorBtn = document.createElement('button');
+          deleteSensorBtn.type = 'button';
+          deleteSensorBtn.className = 'btn btn-tiny btn-ghost-danger';
+          deleteSensorBtn.textContent = '✕';
+          deleteSensorBtn.title = `Delete ${sensor.name}`;
+          deleteSensorBtn.addEventListener('click', () =>
+            confirmAndDelete(`Delete sensor "${sensor.name}"?`, `/api/tracks-12v/sensors/${sensor.id}`)
+          );
+          sensorNameEl.appendChild(deleteSensorBtn);
+        } else {
+          sensorNameEl.textContent = '(no sensor configured)';
+          simBtn.hidden = true;
+          clearBtn.hidden = true;
+          addSensorBtn.hidden = false;
+          addSensorBtn.addEventListener('click', () => triggerAddEndSensor12v(track, endName));
+        }
+
+        const junctionListEl = endBlock.querySelector('.junction-list');
+        const junctions = (track.junctions || []).filter((j) => j.end === endName);
+        for (const junction of junctions) {
+          const jNode = junctionTpl.content.firstElementChild.cloneNode(true);
+          jNode.querySelector('.junction-name').textContent = junction.name;
+          const positionChip = jNode.querySelector('.junction-position');
+          const throwA = jNode.querySelector('.junction-throw-a');
+          const throwB = jNode.querySelector('.junction-throw-b');
+          throwA.addEventListener(
+            'click',
+            withBusyFeedback(throwA, () => postJson(`/api/diagnostics/junctions/${junction.id}/throw`, { direction: 'a' }))
+          );
+          throwB.addEventListener(
+            'click',
+            withBusyFeedback(throwB, () => postJson(`/api/diagnostics/junctions/${junction.id}/throw`, { direction: 'b' }))
+          );
+          const driverChip = document.createElement('span');
+          driverChip.className = 'junction-driver chip mono';
+          driverChip.textContent = `Driver ${junction.driver_number}, Ch ${junction.driver_channel}`;
+          jNode.querySelector('.junction-actions').prepend(driverChip);
+
+          const deleteJunctionBtn = document.createElement('button');
+          deleteJunctionBtn.type = 'button';
+          deleteJunctionBtn.className = 'btn btn-tiny btn-ghost-danger';
+          deleteJunctionBtn.textContent = '✕';
+          deleteJunctionBtn.title = `Delete ${junction.name}`;
+          deleteJunctionBtn.addEventListener('click', () =>
+            confirmAndDelete(`Delete junction "${junction.name}"?`, `/api/tracks-12v/junctions/${junction.id}`)
+          );
+          jNode.querySelector('.junction-actions').appendChild(deleteJunctionBtn);
+          junctionEls.set(junction.id, { positionChip });
+          junctionListEl.appendChild(jNode);
+        }
+        endBlock.querySelector('.add-junction-btn').addEventListener('click', () => triggerAddJunction12v(track, endName));
+
+        ends[endName] = { led, occupancyChip };
+      }
+      shuttleTrackEls.set(track.id, ends);
     }
 
     grid.appendChild(node);
@@ -639,17 +896,20 @@ function buildTracks45v(tracks, allShuttles) {
         sensorNumberChip.className = 'hardware-chip chip mono';
         sensorNumberChip.textContent = `Sensor #${sensor.sensor_number}`;
         sensorNameEl.appendChild(sensorNumberChip);
-        simBtn.hidden = false;
-        clearBtn.hidden = false;
+        const hasAssignedShuttle = track.shuttles.length > 0;
+        simBtn.hidden = !hasAssignedShuttle;
+        clearBtn.hidden = !hasAssignedShuttle;
         addSensorBtn.hidden = true;
-        simBtn.addEventListener(
-          'click',
-          withBusyFeedback(simBtn, () => postJson(`/api/diagnostics/shuttle-sensors/${sensor.id}/simulate`, {}))
-        );
-        clearBtn.addEventListener(
-          'click',
-          withBusyFeedback(clearBtn, () => postJson(`/api/diagnostics/shuttle-sensors/${sensor.id}/simulate-clear`, {}))
-        );
+        if (hasAssignedShuttle) {
+          simBtn.addEventListener(
+            'click',
+            withBusyFeedback(simBtn, () => postJson(`/api/diagnostics/shuttle-sensors/${sensor.id}/simulate`, {}))
+          );
+          clearBtn.addEventListener(
+            'click',
+            withBusyFeedback(clearBtn, () => postJson(`/api/diagnostics/shuttle-sensors/${sensor.id}/simulate-clear`, {}))
+          );
+        }
         const deleteSensorBtn = document.createElement('button');
         deleteSensorBtn.type = 'button';
         deleteSensorBtn.className = 'btn btn-tiny btn-ghost-danger';
@@ -707,8 +967,15 @@ function buildTracks45v(tracks, allShuttles) {
     shuttleTrackEls.set(track.id, ends);
 
     const shuttleListEl = node.querySelector('.shuttle-list');
-    for (const shuttle of track.shuttles) {
-      shuttleListEl.appendChild(buildShuttleBlock(shuttle, shuttleTpl));
+    if (track.shuttles.length === 0) {
+      const emptyNotice = document.createElement('div');
+      emptyNotice.className = 'mono shuttle-empty-state';
+      emptyNotice.textContent = 'No shuttle assigned — register the 4.5V train and assign it to this line.';
+      shuttleListEl.appendChild(emptyNotice);
+    } else {
+      for (const shuttle of track.shuttles) {
+        shuttleListEl.appendChild(buildShuttleBlock(shuttle, shuttleTpl));
+      }
     }
 
     const unassigned = allShuttles.filter((s) => !s.shuttle_track_id);
@@ -754,10 +1021,13 @@ function buildShuttleBlock(shuttle, shuttleTpl) {
   const modeSelect = node.querySelector('.shuttle-mode-select');
   const slider = node.querySelector('.shuttle-speed-slider');
   const speedReadout = node.querySelector('.speed-readout');
+  const headlightsToggle = node.querySelector('.shuttle-headlights-toggle');
   const stopBtn = node.querySelector('.shuttle-stop-btn');
 
   nameInput.value = shuttle.display_name;
   telemetry.textContent = shuttle.ip_address;
+  const headlightsState = !!(shuttle.runtime?.headlights ?? shuttle.runtime?.headlightOn ?? shuttle.runtime?.enabled ?? false);
+  headlightsToggle.checked = headlightsState;
 
   nameInput.addEventListener('input', () => {
     renameBtn.hidden = nameInput.value.trim() === shuttle.display_name;
@@ -782,6 +1052,17 @@ function buildShuttleBlock(shuttle, shuttleTpl) {
     'change',
     withBusyFeedback(slider, () => postJson(`/api/shuttles/${shuttle.id}/speed`, { speed: Number(slider.value) }))
   );
+  headlightsToggle.addEventListener(
+    'change',
+    withBusyFeedback(headlightsToggle, async () => {
+      const enabled = headlightsToggle.checked;
+      const result = await postJson(`/api/shuttles/${shuttle.id}/headlights`, { enabled });
+      const nextState = !!(result.enabled ?? result.on ?? result.headlights ?? enabled);
+      headlightsToggle.checked = nextState;
+      shuttle.runtime = { ...(shuttle.runtime || {}), headlights: nextState };
+    })
+  );
+
   stopBtn.addEventListener(
     'click',
     withBusyFeedback(stopBtn, async () => {
@@ -817,6 +1098,7 @@ function applySnapshot(runtime) {
       applyZoneTelemetry(trackId, zoneId, zoneState);
     }
     if (trackState.mode !== undefined) applyTrackStatusTelemetry(trackId, trackState);
+    applyShuttleTrackTelemetry(trackId, trackState);
   }
   for (const [shuttleTrackId, trackState] of Object.entries(runtime.shuttleTracks || {})) {
     applyShuttleTrackTelemetry(shuttleTrackId, trackState);
@@ -946,6 +1228,7 @@ function connectWebSocket() {
     else if (topic === 'track12v') applyZoneTelemetry(payload.trackId, payload.zoneId, payload.zone);
     else if (topic === 'track12vStatus') applyTrackStatusTelemetry(payload.trackId, payload);
     else if (topic === 'shuttleTrack') applyShuttleTrackTelemetry(payload.shuttleTrackId, payload.track);
+    else if (topic === 'track12vEnd') applyShuttleTrackTelemetry(payload.trackId, payload.track);
     else if (topic === 'shuttle') applyShuttleTelemetry(payload.shuttleId, payload.shuttle);
     else if (topic === 'junction') applyJunctionTelemetry(payload.junctionId, payload.junction);
     else if (topic === 'signal') applySignalTelemetry(payload.signalId, payload.signal);

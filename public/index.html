@@ -25,8 +25,8 @@
 <main id="app">
   <section class="section" id="section-12v">
     <div class="section-title-row">
-      <h2 class="section-title">12V Loops</h2>
-      <button type="button" class="btn btn-tiny" id="addTrack12vBtn">+ Add Loop</button>
+      <h2 class="section-title">12V Layouts</h2>
+      <button type="button" class="btn btn-tiny" id="addTrack12vBtn">+ Add Layout</button>
     </div>
     <div class="card-grid" id="tracks12vGrid"></div>
   </section>
@@ -55,6 +55,148 @@
       <div class="modal-error" id="modalError" hidden></div>
     </div>
   </div>
+
+  <section class="section" id="section-settings">
+    <details class="network-panel">
+      <summary class="section-title network-summary">
+        12V Track Settings
+      </summary>
+
+      <div class="network-body">
+        <p class="network-hint">
+          These values are global controller defaults for the current layout. They are shared by the 12V track controller and apply across zones on that controller, not as a separate override per zone.
+        </p>
+
+        <div class="network-grid">
+          <fieldset class="network-fieldset">
+            <legend>Station dwell</legend>
+            <label class="field-label">Minimum dwell (ms)
+              <input type="number" id="settingsDwellMsMin" min="0" step="100">
+            </label>
+            <label class="field-label">Maximum dwell (ms)
+              <input type="number" id="settingsDwellMsMax" min="0" step="100">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Station lockout &amp; sensor debounce</legend>
+            <label class="field-label">Station lockout (ms)
+              <input type="number" id="settingsStationLockoutMs" min="0" step="100">
+            </label>
+            <label class="field-label">IR sensor debounce (ms)
+              <input type="number" id="settingsSensorDebounceMs" min="0" step="10">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>12V speed ramp</legend>
+            <label class="field-label">Ramp step (%)
+              <input type="number" id="settingsRampStepPercent" min="1" max="100" step="1">
+            </label>
+            <label class="field-label">Ramp interval (ms)
+              <input type="number" id="settingsRampStepIntervalMs" min="1" step="5">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Train power floor / ceiling</legend>
+            <label class="field-label">Minimum motor %
+              <input type="number" id="settingsTrain12vMinMotorPercent" min="0" max="100" step="1">
+            </label>
+            <label class="field-label">Maximum motor %
+              <input type="number" id="settingsTrain12vMaxMotorPercent" min="0" max="100" step="1">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Junctions</legend>
+            <label class="field-label">Junction move duration (ms)
+              <input type="number" id="settingsJunctionDefaultMoveDurationMs" min="50" step="10">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Signal LEDs</legend>
+            <label class="field-label">Brightness (%)
+              <input type="number" id="settingsSignalBrightnessPercent" min="0" max="100" step="1">
+            </label>
+          </fieldset>
+        </div>
+
+        <div class="network-actions">
+          <button type="button" class="btn" id="settingsSaveBtn">Save 12V settings</button>
+          <span id="settingsSaveResult" class="mono network-save-result"></span>
+        </div>
+      </div>
+    </details>
+
+    <details class="network-panel">
+      <summary class="section-title network-summary">
+        4.5V Shuttle Settings
+      </summary>
+
+      <div class="network-body">
+        <p class="network-hint">
+          The Pi is the single source of truth for these values -- each 4.5V shuttle is a "slave" of this profile, not configured independently. New shuttles get this profile automatically when they register; use the button below to re-push it to everything already running.
+        </p>
+
+        <div class="network-grid">
+          <fieldset class="network-fieldset">
+            <legend>Station dwell</legend>
+            <label class="field-label">Minimum dwell (ms)
+              <input type="number" id="settings45vDwellMsMin" min="0" step="100">
+            </label>
+            <label class="field-label">Maximum dwell (ms)
+              <input type="number" id="settings45vDwellMsMax" min="0" step="100">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Hall debounce &amp; station lockout</legend>
+            <label class="field-label">Hall debounce (ms)
+              <input type="number" id="settings45vHallDebounceMs" min="0" step="100">
+            </label>
+            <label class="field-label">Station lockout (ms)
+              <input type="number" id="settings45vStationLockoutMs" min="0" step="100">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Speed ramp</legend>
+            <label class="field-label">Ramp step (%)
+              <input type="number" id="settings45vRampStepPercent" min="1" max="100" step="1">
+            </label>
+            <label class="field-label">Ramp interval (ms)
+              <input type="number" id="settings45vRampStepIntervalMs" min="1" step="5">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Speed</legend>
+            <label class="field-label">Minimum speed (%)
+              <input type="number" id="settings45vMinSpeedPercent" min="1" max="100" step="1">
+            </label>
+            <label class="field-label">Default operating speed (%)
+              <input type="number" id="settings45vDefaultOperatingSpeed" min="1" max="100" step="1">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>Headlights</legend>
+            <label class="field-label">Default brightness (%)
+              <input type="number" id="settings45vHeadlightBrightness" min="10" max="80" step="1">
+            </label>
+          </fieldset>
+        </div>
+
+        <div class="network-actions">
+          <button type="button" class="btn" id="settings45vSaveBtn">Save &amp; push to all shuttles</button>
+          <span id="settings45vSaveResult" class="mono network-save-result"></span>
+        </div>
+      </div>
+    </details>
+  </section>
+
 
   <section class="section" id="section-network">
     <details class="network-panel">
@@ -108,7 +250,7 @@
 
   <div class="empty-state" id="emptyState" hidden>
     <p>No layout configured yet.</p>
-    <p class="empty-state-sub">Use the <strong>+ Add Loop</strong> / <strong>+ Add Shuttle Line</strong> buttons above to get started.</p>
+    <p class="empty-state-sub">Use the <strong>+ Add Layout</strong> / <strong>+ Add Shuttle Line</strong> buttons above to get started.</p>
   </div>
 </main>
 
@@ -127,7 +269,7 @@
       </div>
       <div class="card-head-actions">
         <span class="badge mode-badge">MANUAL</span>
-        <button type="button" class="btn btn-tiny btn-ghost-danger delete-track-btn" title="Delete this loop">✕</button>
+        <button type="button" class="btn btn-tiny btn-ghost-danger delete-track-btn" title="Delete this layout">✕</button>
       </div>
     </div>
 
@@ -144,6 +286,35 @@
         <span class="speed-readout mono">0</span>
       </div>
       <div class="slider-scale"><span>−100</span><span>0</span><span>+100</span></div>
+    </div>
+
+    <div class="ends-row" hidden>
+      <div class="end-block" data-end="west">
+        <div class="end-head">
+          <span class="led end-led"></span>
+          <span class="end-label">WEST</span>
+          <span class="end-occupancy-chip chip"></span>
+        </div>
+        <div class="end-sensor-name mono"></div>
+        <button type="button" class="btn btn-tiny end-sim-btn">Simulate arrival</button>
+        <button type="button" class="btn btn-tiny end-clear-btn">Simulate departure</button>
+        <button type="button" class="btn btn-tiny add-location-sensor-btn">+ End sensor</button>
+        <div class="junction-list"></div>
+        <button type="button" class="btn btn-tiny add-junction-btn">+ Junction</button>
+      </div>
+      <div class="end-block" data-end="east">
+        <div class="end-head">
+          <span class="led end-led"></span>
+          <span class="end-label">EAST</span>
+          <span class="end-occupancy-chip chip"></span>
+        </div>
+        <div class="end-sensor-name mono"></div>
+        <button type="button" class="btn btn-tiny end-sim-btn">Simulate arrival</button>
+        <button type="button" class="btn btn-tiny end-clear-btn">Simulate departure</button>
+        <button type="button" class="btn btn-tiny add-location-sensor-btn">+ End sensor</button>
+        <div class="junction-list"></div>
+        <button type="button" class="btn btn-tiny add-junction-btn">+ Junction</button>
+      </div>
     </div>
 
     <div class="zone-list"></div>
@@ -251,6 +422,10 @@
           <option value="SHUTTLE">Shuttle</option>
           <option value="CONTINUE">Continue</option>
         </select>
+      </label>
+      <label class="field-label checkbox-inline">
+        <input type="checkbox" class="shuttle-headlights-toggle">
+        Headlights
       </label>
       <button type="button" class="btn btn-danger shuttle-stop-btn">Stop</button>
     </div>

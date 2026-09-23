@@ -57,7 +57,7 @@ function getControllerForZone(zoneId) {
   return getTrackController(zone.track_id);
 }
 
-/** Resolve the running controller that owns a given 12V sensor id (block-entry or station only -- not shuttle location sensors). */
+/** Resolve the running controller that owns a given 12V sensor id (block-entry, station, or end-of-line only -- not shuttle location sensors). */
 function getControllerForSensor(sensorId) {
   const sensor = Sensors.get(sensorId);
   if (!sensor.zone_id) {

@@ -7,12 +7,13 @@ const SpeedRamp = require('./ramp');
 const { StationStateMachine } = require('./stationStateMachine');
 const { sliderToMotor } = require('./speedMapping');
 const runtimeState = require('../config/runtimeState');
+const { selectAndThrowRoute, oppositeEnd } = require('../shuttle-coordination/junctionCoordinator');
 
 const MODE = Object.freeze({ MANUAL: 'MANUAL', CONTINUE: 'CONTINUE', SHUTTLE: 'SHUTTLE' });
 
 /**
  * Owns everything needed to run one 12V track: per-zone DRV8871 drivers and
- * ramps, block-entry/station sensors, optional signals, and the occupancy /
+ * ramps, block-entry/station/end-of-line sensors, optional signals, and the occupancy /
  * block-power decision loop.
  *
  * v1 scope (per the brief): a single train per loop. Occupancy is still
@@ -60,10 +61,31 @@ class TrackController {
       );
 
       for (const sensorRow of zone.sensors) {
-        const sensor = new ObstacleSensor(sensorRow.sensor_number);
+        const debounceMs = this.settingsProvider().track12vSensorDebounceMs;
+        const sensor = new ObstacleSensor(sensorRow.sensor_number, { debounceMs });
+        // Not part of ObstacleSensor itself (hardware-only, no config
+        // awareness) -- tagged here so simulateSensorTrigger() knows which
+        // edge to fire without needing the sensorRow passed back in.
+        sensor.triggerEdge = sensorRow.edge;
         this.sensors.set(sensorRow.id, sensor);
-        const unsub = sensor.onTrigger(() => this._handleSensorTrigger(zone, sensorRow));
+        // Which physical edge fires this sensor's control logic is a
+        // placement choice, not tied to role -- any 12V sensor can be wired
+        // to react to the train's leading edge (default) or trailing edge.
+        const fireOnClear = sensorRow.edge === 'trailing';
+        const unsub = fireOnClear
+          ? sensor.onClear(() => this._handleSensorTrigger(zone, sensorRow))
+          : sensor.onTrigger(() => this._handleSensorTrigger(zone, sensorRow));
         this._sensorUnsubscribers.push(unsub);
+
+        // An end-of-line sensor additionally tracks which physical end the
+        // train is at and routes the opposite end's junctions -- same dual
+        // role the 4.5V shuttle line's location sensors play, independent of
+        // which edge (leading/trailing) drives the station stop/dwell above.
+        if (sensorRow.role === 'end-of-line' && sensorRow.end_of_line) {
+          const unsubArrive = sensor.onTrigger(() => this._handleEndOfLineArrival(sensorRow.end_of_line));
+          const unsubDepart = sensor.onClear(() => this._handleEndOfLineDeparture(sensorRow.end_of_line));
+          this._sensorUnsubscribers.push(unsubArrive, unsubDepart);
+        }
       }
     }
   }
@@ -82,7 +104,7 @@ class TrackController {
 
   _targetMotorSpeed() {
     const settings = this.settingsProvider();
-    const motorSpeed = sliderToMotor(this.commandedSlider, settings.train12vMinMotorPercent);
+    const motorSpeed = sliderToMotor(this.commandedSlider, settings.track12vMinMotorPercent, settings.track12vMaxMotorPercent);
     return motorSpeed;
   }
 
@@ -139,7 +161,7 @@ class TrackController {
   _handleSensorTrigger(zone, sensorRow) {
     if (sensorRow.role === 'block-entry') {
       this._handleBlockEntry(zone);
-    } else if (sensorRow.role === 'station') {
+    } else if (sensorRow.role === 'station' || sensorRow.role === 'end-of-line') {
       this._handleStationHit(zone, sensorRow);
     }
   }
@@ -162,10 +184,32 @@ class TrackController {
     }
   }
 
+  /**
+   * Mirrors shuttleEvents.js's location-sensor arrival handling: record
+   * which end the train is at, then throw the OPPOSITE end's junctions --
+   * that's the route the train will actually meet once it reverses back
+   * out. Fire-and-forget (matches the 4.5V pattern), since arrival must
+   * not block the sensor's own station-stop handling above.
+   */
+  _handleEndOfLineArrival(end) {
+    runtimeState.updateTrack12vEnd(this.trackId, { lastKnownEnd: end, occupiedEnd: end });
+    selectAndThrowRoute('12v', this.trackId, oppositeEnd(end)).catch((err) => {
+      console.error(`[trackController] junction routing failed for track ${this.trackId} after arrival at ${end}:`, err.message);
+    });
+  }
+
+  /** Mirrors shuttleEvents.js's location-sensor departure handling: clear live occupancy once the train pulls away. */
+  _handleEndOfLineDeparture(end) {
+    const current = runtimeState.ensure12vTrack(this.trackId);
+    if (current.occupiedEnd === end) {
+      runtimeState.updateTrack12vEnd(this.trackId, { occupiedEnd: null });
+    }
+  }
+
   _handleStationHit(zone, sensorRow) {
     if (this.mode === MODE.MANUAL) return; // station stops only apply in CONTINUE/SHUTTLE
     const machine = this.zoneStationMachines.get(zone.id);
-    if (!machine || !machine.isIdle()) return;
+    if (!machine || !machine.canAccept()) return;
 
     runtimeState.update12vZone(this.trackId, zone.id, { stationAction: 'stopping' });
     this._setSignalForSensor(sensorRow.id, 'red');
@@ -189,7 +233,7 @@ class TrackController {
   _setSignalForSensor(sensorId, aspect) {
     for (const [signalId, signal] of this.signals.entries()) {
       if (signal.sensorId === sensorId) {
-        signal.instance.set(aspect);
+        signal.instance.set(aspect, this.settingsProvider().signalBrightnessPercent);
         runtimeState.updateSignal(signalId, { aspect, name: signal.name });
       }
     }
@@ -197,7 +241,7 @@ class TrackController {
 
   attachSignal(signalRow) {
     const instance = new Signal(signalRow.signal_number);
-    instance.set('green');
+    instance.set('green', this.settingsProvider().signalBrightnessPercent);
     this.signals.set(signalRow.id, { instance, sensorId: signalRow.sensor_id, name: signalRow.name });
     runtimeState.updateSignal(signalRow.id, { aspect: 'green', name: signalRow.name });
   }
@@ -261,13 +305,13 @@ class TrackController {
       throw err;
     }
     ramp.stopImmediate(); // cancel any in-flight ramp so the override takes effect immediately
-    const testSpeed = on ? Math.max(this._targetMotorSpeed(), this.settingsProvider().train12vMinMotorPercent) : 0;
+    const testSpeed = on ? Math.max(this._targetMotorSpeed(), this.settingsProvider().track12vMinMotorPercent) : 0;
     driver.setSpeed(testSpeed);
     runtimeState.update12vZone(this.trackId, zoneId, { appliedSpeed: testSpeed, powered: on, manualOverride: true });
     return this.getStatus();
   }
 
-  /** Manually fire a block-entry or station sensor for this track, for testing without physical hardware. */
+  /** Manually fire a block-entry, station, or end-of-line sensor for this track, for testing without physical hardware. Fires whichever edge (leading/trailing) that sensor is actually configured to react to. */
   simulateSensorTrigger(sensorId) {
     const sensor = this.sensors.get(sensorId);
     if (!sensor) {
@@ -275,7 +319,32 @@ class TrackController {
       err.statusCode = 404;
       throw err;
     }
+    if (sensor.triggerEdge === 'trailing') sensor.simulateClear();
+    else sensor.simulateTrigger();
+    return this.getStatus();
+  }
+
+  /** Simulates the raw active edge, regardless of which edge that sensor's control logic actually reacts to -- mirrors the 4.5V shuttle line's "Simulate arrival" button for end-of-line sensors. */
+  simulateSensorArrival(sensorId) {
+    const sensor = this.sensors.get(sensorId);
+    if (!sensor) {
+      const err = new Error(`Sensor ${sensorId} is not part of track ${this.trackId}`);
+      err.statusCode = 404;
+      throw err;
+    }
     sensor.simulateTrigger();
+    return this.getStatus();
+  }
+
+  /** Simulates the raw release edge -- mirrors the 4.5V shuttle line's "Simulate departure" button for end-of-line sensors. */
+  simulateSensorDeparture(sensorId) {
+    const sensor = this.sensors.get(sensorId);
+    if (!sensor) {
+      const err = new Error(`Sensor ${sensorId} is not part of track ${this.trackId}`);
+      err.statusCode = 404;
+      throw err;
+    }
+    sensor.simulateClear();
     return this.getStatus();
   }
 
@@ -289,13 +358,16 @@ class TrackController {
 
   getStatus() {
     const snap = runtimeState.snapshot();
+    const trackState = snap.tracks12v[this.trackId];
     return {
       trackId: this.trackId,
       name: this.name,
       mode: this.mode,
       commandedSlider: this.commandedSlider,
       direction: this.currentDirection >= 0 ? 'FORWARD' : 'REVERSE',
-      zones: snap.tracks12v[this.trackId]?.zones || {},
+      zones: trackState?.zones || {},
+      lastKnownEnd: trackState?.lastKnownEnd || 'unknown',
+      occupiedEnd: trackState?.occupiedEnd ?? null,
     };
   }
 

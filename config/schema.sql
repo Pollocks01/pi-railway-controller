@@ -29,12 +29,26 @@ CREATE TABLE IF NOT EXISTS zones (
 CREATE TABLE IF NOT EXISTS sensors (
   id              TEXT PRIMARY KEY,
   sensor_number   INTEGER NOT NULL UNIQUE,    -- numbered sensor slot on the breakout board
-  role            TEXT NOT NULL CHECK (role IN ('block-entry', 'station', 'location')),
+  -- 'end-of-line' is the 12V equivalent of the 4.5V shuttle's hall-sensor
+  -- magnet detection -- only valid on 'length' (point-to-point) tracks.
+  -- Not to be confused with the end_of_line column below, which is a
+  -- separate east/west designation used only by role='location'.
+  role            TEXT NOT NULL CHECK (role IN ('block-entry', 'station', 'location', 'end-of-line')),
   name            TEXT NOT NULL,
   -- Exactly one of these owners is set, enforced in application code.
   zone_id         TEXT REFERENCES zones(id) ON DELETE CASCADE,
   shuttle_track_id TEXT REFERENCES tracks_45v(id) ON DELETE CASCADE,
-  end_of_line     TEXT CHECK (end_of_line IN ('east', 'west')) -- only for role='location'
+  -- East/west end designation. Required for role='location' (4.5V) and
+  -- role='end-of-line' (12V) -- both are "which physical end is this
+  -- sensor at", used identically by junction routing to throw the
+  -- opposite end's switches. Not used by other roles.
+  end_of_line     TEXT CHECK (end_of_line IN ('east', 'west')),
+  -- Which edge of a passing train fires the sensor -- applies to every
+  -- 12V role (block-entry, station, end-of-line), since which edge is
+  -- more convenient to wire up depends on physical sensor placement, not
+  -- the role. 'leading' (default) = front of train arrives; 'trailing' =
+  -- back of train clears, i.e. the whole train has passed the sensor.
+  edge            TEXT NOT NULL DEFAULT 'leading' CHECK (edge IN ('leading', 'trailing'))
 );
 
 -- A 4.5V shuttle line: the pair of end sensors + junction sets at each end.
@@ -44,11 +58,16 @@ CREATE TABLE IF NOT EXISTS tracks_45v (
   created_at    TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Junction motors at either end of a 4.5V shuttle line. Each junction owns
--- one channel of a (possibly shared) dual-channel DRV8833.
+-- Junction motors at either end of a 4.5V shuttle line, OR either end of a
+-- 12V 'length' track (same DRV8833 switch-motor hardware, same east/west
+-- end concept and route-selection logic either way -- see
+-- shuttle-coordination/junctionCoordinator.js). Polymorphic owner: no FK
+-- constraint on track_id since it references either tracks_45v or
+-- tracks_12v depending on track_kind; validated in application code.
 CREATE TABLE IF NOT EXISTS junctions (
   id                  TEXT PRIMARY KEY,
-  shuttle_track_id    TEXT NOT NULL REFERENCES tracks_45v(id) ON DELETE CASCADE,
+  track_kind          TEXT NOT NULL CHECK (track_kind IN ('12v', '45v')),
+  track_id            TEXT NOT NULL,
   end                 TEXT NOT NULL CHECK (end IN ('east', 'west')),
   name                TEXT NOT NULL,
   driver_number       INTEGER NOT NULL,        -- numbered DRV8833 board slot

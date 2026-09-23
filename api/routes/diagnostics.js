@@ -34,11 +34,23 @@ router.post('/zones/:zoneId/power', (req, res) => {
   res.json(controller.setZonePowerOverride(req.params.zoneId, on));
 });
 
-// ---- 12V sensor simulate (block-entry or station) -----------------------
+// ---- 12V sensor simulate (block-entry, station, or end-of-line) ---------
 
 router.post('/sensors/:sensorId/simulate', (req, res) => {
   const controller = layoutManager.getControllerForSensor(req.params.sensorId);
   res.json(controller.simulateSensorTrigger(req.params.sensorId));
+});
+
+// ---- 12V end-of-line sensor arrival/departure (mirrors shuttle-sensors below) --
+
+router.post('/sensors/:sensorId/simulate-arrival', (req, res) => {
+  const controller = layoutManager.getControllerForSensor(req.params.sensorId);
+  res.json(controller.simulateSensorArrival(req.params.sensorId));
+});
+
+router.post('/sensors/:sensorId/simulate-departure', (req, res) => {
+  const controller = layoutManager.getControllerForSensor(req.params.sensorId);
+  res.json(controller.simulateSensorDeparture(req.params.sensorId));
 });
 
 // ---- Shuttle location sensor simulate ------------------------------------

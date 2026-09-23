@@ -59,5 +59,13 @@ const setMode = (shuttleId, mode) => relay(shuttleId, 'POST', '/mode', { mode })
 const getConfig = (shuttleId) => relay(shuttleId, 'GET', '/config');
 const setConfig = (shuttleId, config) => relay(shuttleId, 'POST', '/config', config);
 const stop = (shuttleId) => relay(shuttleId, 'POST', '/stop', {});
+// The firmware has no GET /headlights route -- headlight status is part of
+// its GET /config payload (headlightsOn / headlightBrightness), so relay
+// through there instead of a 404.
+const getHeadlights = async (shuttleId) => {
+  const config = await relay(shuttleId, 'GET', '/config');
+  return { headlightsOn: config.headlightsOn, headlightBrightness: config.headlightBrightness };
+};
+const setHeadlights = (shuttleId, enabled) => relay(shuttleId, 'POST', '/headlights', { enabled, on: !!enabled });
 
-module.exports = { relay, getSpeed, setSpeed, setMode, getConfig, setConfig, stop };
+module.exports = { relay, getSpeed, setSpeed, setMode, getConfig, setConfig, stop, getHeadlights, setHeadlights };
