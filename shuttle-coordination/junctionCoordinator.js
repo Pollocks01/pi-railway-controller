@@ -1,22 +1,19 @@
 'use strict';
 
 const crypto = require('crypto');
-const { Junctions, Tracks45v } = require('../config/configStore');
+const { Junctions, Tracks45v, Tracks12v } = require('../config/configStore');
 const Drv8833Channel = require('../gpio/drv8833');
 const runtimeState = require('../config/runtimeState');
 
 /**
  * ASSUMPTION: the brief says "there may be multiple junctions at either end
  * of the shuttle route" but doesn't pin down the exact ladder topology. This
- * implementation models each end as a set of junctions, each leading to one
- * distinct siding/route, plus an implicit "stay on the main line" outcome.
- * Route selection is a single weighted-random draw across
- * (main-line-weight + each junction's route_weight): if a junction is
- * picked, it's thrown to its diverging ('b') position and every other
- * junction at that end is thrown to through ('a'); if "main line" is
- * picked, every junction at that end is thrown to through ('a'). Adjust
- * `MAIN_LINE_WEIGHT` or this selection logic to match your real ladder if
- * it differs (e.g. junctions in series rather than parallel sidings).
+ * implementation models each end as a fixed set of junctions, each leading
+ * to one distinct siding/route. For the railway-controller use case, a
+ * shuttle arriving at one end must route the switch(es) at the opposite end
+ * to their diverging position so the train can reverse into the configured
+ * branch; the explicit "main line" outcome is kept only as a fallback when a
+ * target end has no junctions configured at all.
  *
  * RULE: every junction always starts in the THROUGH position. There's no
  * position feedback from the hardware, so the Pi can never actually know
@@ -27,7 +24,7 @@ const runtimeState = require('../config/runtimeState');
  * junction is created via the config UI. This makes "through" a guaranteed
  * physical fact each time, not a hopeful assumption.
  */
-const MAIN_LINE_WEIGHT = 1.0;
+const MAIN_LINE_WEIGHT = 0.0;
 
 const channelCache = new Map(); // junctionId -> Drv8833Channel
 
@@ -51,16 +48,23 @@ function weightedPick(items, getWeight) {
   return items[items.length - 1];
 }
 
+function oppositeEnd(end) {
+  return end === 'east' ? 'west' : 'east';
+}
+
 /**
  * Select a route and throw the physical junctions accordingly. Resolves
  * once all junction moves have completed (i.e. once it's safe to grant the
- * shuttle permission to depart).
- * @param {string} shuttleTrackId
+ * shuttle/train permission to depart). Works identically for a 4.5V
+ * shuttle line ('45v') and a 12V 'length' track ('12v') -- same hardware,
+ * same east/west end concept.
+ * @param {'12v'|'45v'} trackKind
+ * @param {string} trackId
  * @param {'east'|'west'} end
  * @returns {Promise<{chosenJunctionId: string|null, chosenJunctionName: string|null}>}
  */
-async function selectAndThrowRoute(shuttleTrackId, end) {
-  const junctions = Junctions.listForEnd(shuttleTrackId, end);
+async function selectAndThrowRoute(trackKind, trackId, end) {
+  const junctions = Junctions.listForEnd(trackKind, trackId, end);
 
   if (junctions.length === 0) {
     return { chosenJunctionId: null, chosenJunctionName: null };
@@ -69,7 +73,13 @@ async function selectAndThrowRoute(shuttleTrackId, end) {
   const options = [{ kind: 'main', weight: MAIN_LINE_WEIGHT }, ...junctions.map((j) => ({ kind: 'junction', junction: j, weight: j.route_weight }))];
   const chosen = weightedPick(options, (o) => o.weight);
 
-  const moves = junctions.map((junction) => {
+  const allTrackJunctions = Junctions.listForTrack(trackKind, trackId);
+
+  // Reset every junction on the shuttle track before throwing the selected
+  // route. Otherwise the previously chosen branch can stay in its diverging
+  // state and later arrivals appear to do nothing because a stale switch is
+  // already left in the wrong position.
+  const moves = allTrackJunctions.map((junction) => {
     const channel = getChannel(junction);
     const throwToB = chosen.kind === 'junction' && chosen.junction.id === junction.id;
     runtimeState.updateJunction(junction.id, { position: throwToB ? 'diverging' : 'through', moving: true });
@@ -82,7 +92,7 @@ async function selectAndThrowRoute(shuttleTrackId, end) {
 
   return chosen.kind === 'junction'
     ? { chosenJunctionId: chosen.junction.id, chosenJunctionName: chosen.junction.name }
-    : { chosenJunctionId: null, chosenJunctionName: 'main line' };
+    : { chosenJunctionId: junctions[0].id, chosenJunctionName: junctions[0].name };
 }
 
 /**
@@ -135,8 +145,12 @@ async function homeJunction(junction) {
  */
 async function homeAllJunctions() {
   const results = [];
-  for (const track of Tracks45v.list()) {
-    for (const junction of Junctions.listForTrack(track.id)) {
+  const owners = [
+    ...Tracks45v.list().map((t) => ({ trackKind: '45v', trackId: t.id })),
+    ...Tracks12v.list().map((t) => ({ trackKind: '12v', trackId: t.id })),
+  ];
+  for (const { trackKind, trackId } of owners) {
+    for (const junction of Junctions.listForTrack(trackKind, trackId)) {
       try {
         results.push({ ...(await homeJunction(junction)), ok: true });
       } catch (err) {
@@ -148,4 +162,4 @@ async function homeAllJunctions() {
   return results;
 }
 
-module.exports = { selectAndThrowRoute, throwJunctionManually, homeJunction, homeAllJunctions };
+module.exports = { selectAndThrowRoute, throwJunctionManually, homeJunction, homeAllJunctions, oppositeEnd };

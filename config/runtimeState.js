@@ -24,7 +24,7 @@ const state = {
   shuttleTracks: {},
   // keyed by shuttle id -> last known relay-visible state from the shuttle's own /speed + /config
   shuttles: {},
-  // keyed by junction id -> { position: 'unknown'|'east'|'west'|'moving', lastMovedAt }
+  // keyed by junction id -> { position: 'through'|'diverging', moving, homedAt?, manualOverride? }
   junctions: {},
   // keyed by signal id -> { aspect: 'red'|'green'|'off' }
   signals: {},
@@ -93,6 +93,12 @@ function ensure12vTrack(trackId) {
   if (!state.tracks12v[trackId]) {
     state.tracks12v[trackId] = {
       zones: {}, // zoneId -> { occupied, powered, direction, stationAction, dwellUntil }
+      // Only meaningful for 'length' topology tracks with end-of-line
+      // sensors -- mirrors the 4.5V shuttle track's lastKnownEnd/occupiedEnd
+      // (see ensureShuttleTrack) so junction routing and the UI work
+      // identically for both.
+      lastKnownEnd: 'unknown', // 'east' | 'west' | 'unknown' -- persists across a departure, used for junction routing
+      occupiedEnd: null, // 'east' | 'west' | null -- live, clears the moment the end-of-line sensor un-blocks
       updatedAt: new Date().toISOString(),
     };
   }
@@ -124,6 +130,14 @@ function updateTrack12vStatus(trackId, patch) {
   Object.assign(track, patch, { updatedAt: new Date().toISOString() });
   scheduleSnapshot();
   notify('track12vStatus', { trackId, mode: track.mode, commandedSlider: track.commandedSlider, direction: track.direction });
+}
+
+/** End-of-line arrival/departure state for a 'length' 12V track -- same shape and purpose as updateShuttleTrack. */
+function updateTrack12vEnd(trackId, patch) {
+  const track = ensure12vTrack(trackId);
+  Object.assign(track, patch, { updatedAt: new Date().toISOString() });
+  scheduleSnapshot();
+  notify('track12vEnd', { trackId, track });
 }
 
 function updateShuttleTrack(shuttleTrackId, patch) {
@@ -167,6 +181,7 @@ module.exports = {
   ensureShuttleTrack,
   update12vZone,
   updateTrack12vStatus,
+  updateTrack12vEnd,
   updateShuttleTrack,
   updateShuttle,
   updateJunction,

@@ -47,7 +47,7 @@ router.delete('/sensors/:sensorId', (req, res) => {
 router.post(
   '/:trackId/junctions',
   asyncHandler(async (req, res) => {
-    const junction = Junctions.create({ shuttleTrackId: req.params.trackId, ...req.body });
+    const junction = Junctions.create({ trackKind: '45v', trackId: req.params.trackId, ...req.body });
     // Never leave a newly-wired junction in an unknown position -- home it
     // to 'through' the moment it exists, same rule as the boot-time pass.
     await homeJunction(junction);

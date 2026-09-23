@@ -4,15 +4,31 @@ Session-recovery doc. If a session starts fresh (new conversation,
 sandbox reset, whatever), read this first, then `README.md` for full
 detail on anything referenced below.
 
+This repo: https://github.com/Pollocks01/pi-railway-controller
+4.5V shuttle firmware (separate repo): https://github.com/Pollocks01/lego-train-controller
+
 ## Status: fully built, tested, and working
 
+- **2026-09-23: signals moved off direct-GPIO drive onto DRV8833 + PWM
+  brightness, network switch removed.** Driving a bare LED straight off a
+  3.3V GPIO with only a series resistor blew a Pi. Signals #1/#2 now sit
+  behind a DRV8833 H-bridge channel each (same chip family already used
+  for junctions) instead of direct GPIO -- the GPIOs only drive the
+  DRV8833's logic inputs now, the H-bridge + a resistor sized for its VM
+  does the actual LED driving. Brightness is software-PWM'd, same
+  approach as `Drv8871`'s motor speed and the shuttle firmware's headlight
+  PWM (new `Settings.signalBrightnessPercent`, default 70). The physical
+  AP/home-network switch was removed (this Pi is now fixed to AP-only) to
+  free its 2 GPIOs for a 3rd signal, since that's exactly the 2 spare pins
+  a new DRV8833 channel needs. See `gpio/pinMap.js` (`SIGNAL_PINS` wiring
+  notes, incl. the resistor value math) and `gpio/signal.js`.
 - Full Node/Express backend: SQLite config store, in-memory runtime
   state + debounced snapshotting, GPIO abstraction (real `onoff` on the
   Pi, mock everywhere else), 12V track control (CONTINUE + SHUTTLE
   modes), 4.5V shuttle relay + junction coordination, WebSocket live
   broadcast.
 - Web UI (`public/`): dark panel-style dashboard, no build step, no CDN
-  dependencies. Cards per 12V loop and 4.5V shuttle line, live telemetry
+  dependencies. Cards per 12V layout and 4.5V shuttle line, live telemetry
   over WebSocket, diagnostics/manual-override controls, and now full
   **config authoring** -- "+ Add..." buttons and X delete buttons for
   every layout/zone/sensor/signal/train/junction, backed by a single
@@ -32,19 +48,26 @@ detail on anything referenced below.
   behavior itself (`Drv8833Channel.throw_()`) was already correct --
   never held voltage -- this fix was purely about the missing defined
   starting state.
-- **Network mode switch**: physical 2-way switch (GPIO2/GPIO3) read once
-  at boot, applies the matching NetworkManager (`nmcli`) profile. UI panel
-  for AP/home-network credentials + Reboot + Shutdown, both confirm-gated.
+- **Network mode**: fixed to AP mode (no physical switch anymore -- see
+  "2026-09-23: signals moved to DRV8833, network switch removed" below).
+  UI panel for AP credentials + Reboot + Shutdown, both confirm-gated.
   **Not yet verified against real `nmcli`/hardware** -- dry-run tested only.
-- 4.5V firmware update (`firmware-4.5v/`): `/register` handshake, AP-join-
-  with-fallback, "stopped" -> permission-to-depart coordination. **Not yet
-  flashed to real hardware.**
-- Two smoke tests, both jsdom-based (load the real UI, fire real DOM
-  events, verify against the real running server):
-  - `npm run test:ui-smoke` -- control surface (mode/speed/diagnostics/
-    network panel).
-  - `npm run test:authoring-smoke` -- the add-track and add-zone flows,
-    including the async inventory-populated dropdown, with cleanup.
+- 4.5V firmware update, in its own separate repo (not this one):
+  https://github.com/Pollocks01/lego-train-controller -- `/register`
+  handshake, AP-join-with-fallback, "stopped" -> permission-to-depart
+  coordination. **Not yet flashed to real hardware.**
+- Four smoke test scripts (`npm run test:...`), run against the real
+  server/DB (seed the example config first):
+  - `test:ui-smoke` -- jsdom-based, loads the real UI and fires real DOM
+    events against the control surface (mode/speed/diagnostics/network
+    panel).
+  - `test:authoring-smoke` -- jsdom-based, the add-track and add-zone
+    flows, including the async inventory-populated dropdown, with cleanup.
+  - `test:shuttle-arrival-smoke` -- backend-only, checks a location-sensor
+    arrival at one end routes the junction at the opposite end.
+  - `test:shuttle-route-stability-smoke` -- backend-only, checks stale
+    diverging junction state from a previous route gets reset to
+    'through' on the next arrival, across alternating ends.
 
 ## Deliberately shelved (not a gap to fill later by default)
 

@@ -11,7 +11,7 @@
 // Safe to re-run against a fresh DB; will error if example rows already
 // exist (delete data/railway.db to start over).
 
-const { Tracks12v, Zones, Sensors, Signals, Trains12v, Tracks45v, Junctions } = require('../config/configStore');
+const { Tracks12v, Zones, Sensors, Signals, Trains12v, Tracks45v, Junctions, Shuttles } = require('../config/configStore');
 
 function main() {
   // ---- Two single-zone 12V loops --------------------------------------
@@ -27,6 +27,33 @@ function main() {
   Signals.create({ signalNumber: 2, name: 'Loop 2 signal', sensorId: loop2Station.id });
   Trains12v.create({ name: 'Loop 2 train', trackId: loop2.id, startingZoneId: loop2Zone.id });
 
+  // ---- One 12V 'length' track, junction per end (same as the 4.5V line) --
+  const length1 = Tracks12v.create({ name: '12V Length 1', topology: 'length' });
+  const length1Zone = Zones.create({ trackId: length1.id, name: 'Length 1 (single zone)', sequenceIndex: 0, driverNumber: 3 });
+  Sensors.create({ sensorNumber: 5, role: 'end-of-line', name: 'East end sensor', zoneId: length1Zone.id, endOfLine: 'east' });
+  Sensors.create({ sensorNumber: 6, role: 'end-of-line', name: 'West end sensor', zoneId: length1Zone.id, endOfLine: 'west' });
+  Junctions.create({
+    trackKind: '12v',
+    trackId: length1.id,
+    end: 'east',
+    name: 'East siding junction',
+    driverNumber: 2,
+    driverChannel: 1,
+    moveDurationMs: 200,
+    routeWeight: 1.0,
+  });
+  Junctions.create({
+    trackKind: '12v',
+    trackId: length1.id,
+    end: 'west',
+    name: 'West siding junction',
+    driverNumber: 2,
+    driverChannel: 2,
+    moveDurationMs: 200,
+    routeWeight: 1.0,
+  });
+  // Trains12v.create({ name: 'Length 1 train', trackId: length1.id, startingZoneId: length1Zone.id });
+
   // ---- 4.5V shuttle line, one junction per end --------------------------
   const shuttleLine = Tracks45v.create({ name: 'Shuttle Line 1' });
 
@@ -34,7 +61,8 @@ function main() {
   Sensors.create({ sensorNumber: 4, role: 'location', name: 'West end sensor', shuttleTrackId: shuttleLine.id, endOfLine: 'west' });
 
   Junctions.create({
-    shuttleTrackId: shuttleLine.id,
+    trackKind: '45v',
+    trackId: shuttleLine.id,
     end: 'east',
     name: 'East siding junction',
     driverNumber: 1,
@@ -43,7 +71,8 @@ function main() {
     routeWeight: 1.0,
   });
   Junctions.create({
-    shuttleTrackId: shuttleLine.id,
+    trackKind: '45v',
+    trackId: shuttleLine.id,
     end: 'west',
     name: 'West siding junction',
     driverNumber: 1,
@@ -52,10 +81,20 @@ function main() {
     routeWeight: 1.0,
   });
 
+  const simulatedShuttle = Shuttles.register({
+    ipAddress: '192.168.4.50',
+    macAddress: 'AA:BB:CC:DD:EE:50',
+    firmwareVersion: 'sim-1.0',
+  });
+  Shuttles.rename(simulatedShuttle.id, 'Simulated Shuttle');
+  Shuttles.assignTrack(simulatedShuttle.id, shuttleLine.id);
+
   console.log('Seeded day-1 config:');
   console.log(`  12V Loop 1:    ${loop1.id}  (zone ${loop1Zone.id})`);
   console.log(`  12V Loop 2:    ${loop2.id}  (zone ${loop2Zone.id})`);
+  console.log(`  12V Length 1:  ${length1.id}  (zone ${length1Zone.id})`);
   console.log(`  Shuttle line:  ${shuttleLine.id}`);
+  console.log(`  Simulated shuttle: ${simulatedShuttle.display_name} (${simulatedShuttle.id}) assigned to ${shuttleLine.id}`);
 }
 
 main();

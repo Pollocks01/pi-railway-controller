@@ -49,7 +49,10 @@ const Tracks12v = {
     const track = this.get(id);
     const zones = Zones.listForTrack(id);
     const trains = db.prepare('SELECT * FROM trains_12v WHERE track_id = ?').all(id);
-    return { ...track, zones, trains };
+    // Junctions only make sense on 'length' tracks (mirrors the 4.5V shuttle
+    // line's ends-row), but harmless to include (empty) for 'loop' tracks too.
+    const junctions = Junctions.listForTrack('12v', id);
+    return { ...track, zones, trains, junctions };
   },
 };
 
@@ -93,7 +96,7 @@ const Zones = {
 };
 
 // -----------------------------------------------------------------------
-// Sensors (shared pool: block-entry / station / location)
+// Sensors (shared pool: block-entry / station / location / end-of-line)
 // -----------------------------------------------------------------------
 
 const Sensors = {
@@ -113,10 +116,11 @@ const Sensors = {
     if (!row) notFound(`Sensor ${id} not found`);
     return row;
   },
-  create({ sensorNumber, role, name, zoneId = null, shuttleTrackId = null, endOfLine = null }) {
+  create({ sensorNumber, role, name, zoneId = null, shuttleTrackId = null, endOfLine = null, edge = 'leading' }) {
     assert(Number.isInteger(sensorNumber) && sensorNumber > 0, 'sensorNumber must be a positive integer');
-    assert(['block-entry', 'station', 'location'].includes(role), 'invalid role');
+    assert(['block-entry', 'station', 'location', 'end-of-line'].includes(role), 'invalid role');
     assert(name && name.trim(), 'name is required');
+    assert(['leading', 'trailing'].includes(edge), "edge must be 'leading' or 'trailing'");
     const existing = db.prepare('SELECT id FROM sensors WHERE sensor_number = ?').get(sensorNumber);
     assert(!existing, `sensor_number ${sensorNumber} is already in use`);
 
@@ -127,14 +131,22 @@ const Sensors = {
     } else {
       assert(zoneId, `role '${role}' requires zoneId`);
       assert(!shuttleTrackId, `role '${role}' sensors cannot be attached to a shuttle track`);
-      Zones.get(zoneId);
+      const zone = Zones.get(zoneId);
+      if (role === 'end-of-line') {
+        const track = Tracks12v.get(zone.track_id);
+        assert(track.topology === 'length', "role 'end-of-line' is only valid on 'length' (point-to-point) tracks");
+        // Mirrors the 4.5V shuttle's 'location' sensor: an end-of-line sensor
+        // must say which physical end it's at, so junction routing ("throw
+        // the opposite end") works the same way for 12V length tracks.
+        assert(['east', 'west'].includes(endOfLine), "role 'end-of-line' requires endOfLine of 'east' or 'west'");
+      }
     }
 
     const id = uuidv4();
     db.prepare(
-      `INSERT INTO sensors (id, sensor_number, role, name, zone_id, shuttle_track_id, end_of_line)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, sensorNumber, role, name.trim(), zoneId, shuttleTrackId, endOfLine);
+      `INSERT INTO sensors (id, sensor_number, role, name, zone_id, shuttle_track_id, end_of_line, edge)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, sensorNumber, role, name.trim(), zoneId, shuttleTrackId, endOfLine, edge);
     return this.get(id);
   },
   remove(id) {
@@ -170,30 +182,36 @@ const Tracks45v = {
   withDetail(id) {
     const track = this.get(id);
     const sensors = Sensors.listForShuttleTrack(id);
-    const junctions = Junctions.listForTrack(id);
+    const junctions = Junctions.listForTrack('45v', id);
     const shuttles = db.prepare('SELECT * FROM shuttles WHERE shuttle_track_id = ?').all(id);
     return { ...track, sensors, junctions, shuttles };
   },
 };
 
 const Junctions = {
-  listForTrack(shuttleTrackId) {
+  // Junctions are polymorphic: a 4.5V shuttle line ('45v') or a 12V
+  // 'length' track ('12v') -- same DRV8833 switch-motor hardware, same
+  // east/west end concept, same route-selection logic either way (see
+  // shuttle-coordination/junctionCoordinator.js).
+  listForTrack(trackKind, trackId) {
     return db
-      .prepare('SELECT * FROM junctions WHERE shuttle_track_id = ? ORDER BY end, name')
-      .all(shuttleTrackId);
+      .prepare('SELECT * FROM junctions WHERE track_kind = ? AND track_id = ? ORDER BY end, name')
+      .all(trackKind, trackId);
   },
-  listForEnd(shuttleTrackId, end) {
+  listForEnd(trackKind, trackId, end) {
     return db
-      .prepare('SELECT * FROM junctions WHERE shuttle_track_id = ? AND end = ?')
-      .all(shuttleTrackId, end);
+      .prepare('SELECT * FROM junctions WHERE track_kind = ? AND track_id = ? AND end = ?')
+      .all(trackKind, trackId, end);
   },
   get(id) {
     const row = db.prepare('SELECT * FROM junctions WHERE id = ?').get(id);
     if (!row) notFound(`Junction ${id} not found`);
     return row;
   },
-  create({ shuttleTrackId, end, name, driverNumber, driverChannel, moveDurationMs = 200, routeWeight = 1.0 }) {
-    Tracks45v.get(shuttleTrackId);
+  create({ trackKind, trackId, end, name, driverNumber, driverChannel, moveDurationMs = 200, routeWeight = 1.0 }) {
+    assert(['12v', '45v'].includes(trackKind), "trackKind must be '12v' or '45v'");
+    if (trackKind === '45v') Tracks45v.get(trackId);
+    else Tracks12v.get(trackId);
     assert(['east', 'west'].includes(end), "end must be 'east' or 'west'");
     assert(name && name.trim(), 'name is required');
     assert(Number.isInteger(driverNumber) && driverNumber > 0, 'driverNumber must be a positive integer');
@@ -206,9 +224,9 @@ const Junctions = {
 
     const id = uuidv4();
     db.prepare(
-      `INSERT INTO junctions (id, shuttle_track_id, end, name, driver_number, driver_channel, move_duration_ms, route_weight)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(id, shuttleTrackId, end, name.trim(), driverNumber, driverChannel, moveDurationMs, routeWeight);
+      `INSERT INTO junctions (id, track_kind, track_id, end, name, driver_number, driver_channel, move_duration_ms, route_weight)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, trackKind, trackId, end, name.trim(), driverNumber, driverChannel, moveDurationMs, routeWeight);
     return this.get(id);
   },
   remove(id) {
@@ -298,7 +316,7 @@ const Signals = {
     assert(name && name.trim(), 'name is required');
     if (sensorId) {
       const sensor = Sensors.get(sensorId);
-      assert(sensor.role === 'station', 'signals may only be attached to station sensors');
+      assert(['station', 'end-of-line'].includes(sensor.role), 'signals may only be attached to station or end-of-line sensors');
     }
 
     db.prepare('DELETE FROM signals WHERE sensor_id IS NULL').run();
@@ -360,22 +378,58 @@ const Trains12v = {
 // -----------------------------------------------------------------------
 
 const DEFAULT_SETTINGS = {
-  dwellMsMin: 4000,
-  dwellMsMax: 7000,
-  rampStepPercent: 4,
-  rampStepIntervalMs: 25,
-  // 12V motors don't run well slowly -- map the -100..+100 slider onto
-  // -100..-40 / +40..+100, mirroring the shuttle firmware's MOTOR_MIN_PERCENT
-  // approach but expressed as settings rather than a compile-time constant.
-  train12vMinMotorPercent: 40,
+  // ---- 12V track settings (this controller's own track-control loop) ----
+  track12vDwellMsMin: 4000,
+  track12vDwellMsMax: 7000,
+  track12vRampStepPercent: 4,
+  track12vRampStepIntervalMs: 25,
+  // 12V motors don't run well slowly, and can run too fast/hot at full
+  // Vm -- map the -100..+100 slider onto -max..-min / +min..+max, mirroring
+  // the shuttle firmware's MOTOR_MIN_PERCENT approach but expressed as
+  // settings (with both a floor and a ceiling) rather than a compile-time
+  // constant.
+  track12vMinMotorPercent: 40,
+  track12vMaxMotorPercent: 80,
+  // IR obstacle sensor debounce (12V has no hall sensors -- see gpio/sensor.js).
+  track12vSensorDebounceMs: 100,
+  // Signal LED brightness, 0-100 (see gpio/signal.js) -- PWM duty applied
+  // to whichever DRV8833 side is driving the current aspect. Same idea as
+  // shuttle45vHeadlightBrightness below. Sanitized/clamped in Signal.set(),
+  // not here, since this key is just plain passthrough settings storage.
+  signalBrightnessPercent: 60,
+  // Mirrors the shuttle firmware's stationLockoutMs: ignores repeat
+  // station/end-of-line triggers for this long after a train resumes
+  // moving, so a train edging forward off the same sensor can't
+  // immediately re-trigger a stop.
+  track12vStationLockoutMs: 2000,
+  // Shared by 12V and 4.5V junction motors (same DRV8833 hardware/pulse
+  // model either way).
   junctionDefaultMoveDurationMs: 200,
-  // Network mode (AP vs. home-network) is decided by a physical switch at
-  // boot (see gpio/networkModeSwitch.js + scripts/apply-network-mode.js),
-  // but the credentials for BOTH possible modes are stored here so the
-  // boot script has something to apply regardless of which way the switch
-  // is thrown. Changing these takes effect on next reboot, not live.
+
+  // ---- 4.5V shuttle settings (pushed down to shuttles' own /config) ----
+  // The Pi is the single source of truth for these -- each shuttle is a
+  // "slave" of this profile, synced via POST /config on register and via
+  // the "push to shuttles" action, rather than being edited per-device.
+  shuttle45vDwellMsMin: 4000,
+  shuttle45vDwellMsMax: 7000,
+  shuttle45vMinSpeedPercent: 25,
+  shuttle45vHallDebounceMs: 2000,
+  shuttle45vStationLockoutMs: 2000,
+  shuttle45vRampStepPercent: 20,
+  shuttle45vRampStepIntervalMs: 100,
+  shuttle45vDefaultOperatingSpeed: 92,
+  shuttle45vHeadlightBrightness: 60,
+  // This Pi is fixed to AP mode (see scripts/apply-network-mode.js -- the
+  // old physical AP/home-network switch was removed 2026-09-23 to free up
+  // 2 GPIOs for a 3rd signal). networkStaSsid/networkStaPassword are kept
+  // for a possible future STA mode but are currently unused.
+  // Must match PI_AP_PASSWORD in the shuttle firmware (lego-train-controller
+  // repo) -- that value is compiled in, not configurable at runtime, so
+  // changing this here without also updating and reflashing the firmware
+  // breaks the shuttle's ability to join the Pi's AP. See README networking
+  // section.
   networkApSsid: 'PiRailwayController',
-  networkApPassword: '',
+  networkApPassword: 'ChangeMe123!',
   networkStaSsid: '',
   networkStaPassword: '',
 };

@@ -12,7 +12,7 @@
 class SpeedRamp {
   constructor(driver, settingsProvider) {
     this.driver = driver;
-    this.settingsProvider = settingsProvider; // () => { rampStepPercent, rampStepIntervalMs }
+    this.settingsProvider = settingsProvider; // () => { track12vRampStepPercent, track12vRampStepIntervalMs }
     this._timer = null;
     this._target = 0;
   }
@@ -23,8 +23,23 @@ class SpeedRamp {
     this._tick();
   }
 
+  _stepToward(current, target, stepPercent) {
+    if (current === target) return target;
+
+    if ((current > 0 && target < 0) || (current < 0 && target > 0)) {
+      // Ease through zero cleanly before reversing direction.
+      const reduced = Math.abs(current) - stepPercent;
+      if (reduced <= 0) return 0;
+      return current > 0 ? reduced : -reduced;
+    }
+
+    const delta = target - current;
+    if (Math.abs(delta) <= stepPercent) return target;
+    return current + Math.sign(delta) * stepPercent;
+  }
+
   _tick() {
-    const { rampStepPercent, rampStepIntervalMs } = this.settingsProvider();
+    const { track12vRampStepPercent, track12vRampStepIntervalMs } = this.settingsProvider();
     const current = this.driver.speedPercent;
     const target = this._target;
 
@@ -33,19 +48,15 @@ class SpeedRamp {
       return;
     }
 
-    let next;
-    if ((current > 0 && target < 0) || (current < 0 && target > 0)) {
-      // pass cleanly through zero before reversing
-      const reduced = Math.abs(current) - rampStepPercent;
-      next = reduced <= 0 ? 0 : current > 0 ? reduced : -reduced;
-    } else {
-      const delta = target - current;
-      next = Math.abs(delta) <= rampStepPercent ? target : current + Math.sign(delta) * rampStepPercent;
-    }
-
+    const next = this._stepToward(current, target, track12vRampStepPercent);
     this.driver.setSpeed(next);
 
-    this._timer = setTimeout(() => this._tick(), rampStepIntervalMs);
+    if (next === target) {
+      this._timer = null;
+      return;
+    }
+
+    this._timer = setTimeout(() => this._tick(), track12vRampStepIntervalMs);
     this._timer.unref?.();
   }
 

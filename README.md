@@ -12,7 +12,18 @@ Central controller for a LEGO layout combining:
 Both subsystems share one Raspberry Pi, one SQLite config store, one web
 UI, and one REST/WebSocket API.
 
+**Repositories:**
+
+- This repo (Pi-side server + web UI):
+  https://github.com/Pollocks01/pi-railway-controller
+- 4.5V shuttle firmware (separate repo, flashed to the Seeed XIAO ESP32-C3):
+  https://github.com/Pollocks01/lego-train-controller
+
 ## Quick start (dev machine, no Pi required)
+
+Requires **Node 18+** (the shuttle relay in `shuttle-coordination/relay.js`
+uses the global `fetch`, stable since Node 18; no separate HTTP client
+dependency needed for that path).
 
 The whole stack runs on a normal Linux/Mac/WSL dev machine using a **mock
 GPIO layer** — every pin read/write is logged to the console instead of
@@ -49,21 +60,17 @@ for real hardware activity.
    tool (`nmcli`) — which is exactly what this project needs for the
    AP/home-network toggle switch described below. You do not need to
    install or configure hostapd or dnsmasq.
-4. Wire the AP/home-network switch: a 2-way (SPDT) switch with its common
-   wired to GND, and each throw wired to GPIO2 and GPIO3 respectively (see
-   `gpio/pinMap.js` -- `NETWORK_MODE_SWITCH_PINS`). Enable internal
-   pull-ups on both pins by adding this line to `/boot/firmware/config.txt`
-   and rebooting once:
-
-   ```
-   gpio=2,3=pu
-   ```
+4. Wire the signal LED drivers and, if this is the first time wiring
+   them up, note that GPIO2/GPIO3 no longer carry the (removed) AP/
+   home-network switch -- they now go to a DRV8833 channel for Signal #3.
+   See `gpio/pinMap.js` (`SIGNAL_PINS`) for the full per-signal wiring
+   notes, including the series resistor value.
 5. Set up the boot-time network script and a passwordless-reboot sudo rule:
 
    ```ini
    # /etc/systemd/system/railway-network-mode.service
    [Unit]
-   Description=Apply AP/home-network mode from physical switch
+   Description=Apply AP-mode WiFi at boot
    Before=railway-controller.service
    After=NetworkManager.service
    Wants=NetworkManager.service
@@ -82,11 +89,11 @@ for real hardware activity.
    sudo systemctl enable railway-network-mode.service
    ```
 
-   This runs once at every boot, reads the switch, and creates/activates
-   the matching `railway-ap` or `railway-sta` NetworkManager connection
-   profile using the SSID/password saved via the UI's Network Settings
-   panel (`Settings.networkApSsid` etc, in the config DB). It needs to run
-   as root since changing system network connections isn't something an
+   This runs once at every boot and creates/activates the `railway-ap`
+   NetworkManager connection profile using the SSID/password saved via
+   the UI's Network Settings panel (`Settings.networkApSsid` etc, in the
+   config DB). It needs to run as root since changing system network
+   connections isn't something an
    unprivileged user can do.
 
    The in-app "Reboot Pi" button needs its own narrow permission -- the
@@ -205,10 +212,17 @@ api/                    Express routes + orchestration
   routes/device.js           Endpoints the shuttle firmware itself calls:
                           POST /register, POST /shuttle-events/stopped
   routes/diagnostics.js      Manual test/demo overrides -- see below
+  routes/network.js          AP/home-network SSID+password config, status
+  routes/system.js           Reboot/shutdown (confirm-gated, needs sudoers)
+  routes/inventory.js        Free pin-map numbers per device type, for the
+                          config-authoring UI's dropdowns
   routes/signals.js, settings.js, status.js
 
 public/                 Static web UI (served as-is, no build step)
 scripts/seed-example-config.js   Populates the day-1 example layout
+scripts/apply-network-mode.js    Boot-time AP/home-network switch reader
+                                  + nmcli profile apply -- see "Network
+                                  mode switch" below
 scripts/smoke-test-ui.js          Loads the live UI into a real (jsdom)
                                   DOM and exercises mode/speed/diagnostics
                                   controls -- `npm run test:ui-smoke` with
@@ -216,6 +230,17 @@ scripts/smoke-test-ui.js          Loads the live UI into a real (jsdom)
                                   seeded config. Not a full browser, but
                                   catches real DOM/JS wiring bugs a syntax
                                   check alone would miss.
+scripts/smoke-test-authoring.js   `npm run test:authoring-smoke` -- the
+                                  add-track/add-zone config-authoring
+                                  flows via real DOM events, with cleanup.
+scripts/smoke-test-shuttle-arrival-routing.js    Backend-only; `npm run
+                                  test:shuttle-arrival-smoke` -- checks a
+                                  location-sensor arrival at one end
+                                  routes the junction at the opposite end.
+scripts/smoke-test-shuttle-route-stability.js    Backend-only; `npm run
+                                  test:shuttle-route-stability-smoke` --
+                                  checks stale diverging junction state
+                                  gets reset across alternating arrivals.
 server.js               Entry point
 ```
 
@@ -233,7 +258,7 @@ subsystems just resync live from the next sensor event).
 Worked example (also what `scripts/seed-example-config.js` creates -- the
 day-1 target):
 
-- **Two 12V loops**, one zone each. A single-zone track doesn't need a
+- **Two 12V layouts**, one zone each. A single-zone track doesn't need a
   block-entry sensor (see `Zones.requiresBlockEntrySensor()`), just a
   station sensor (+ optional signal) for stop/dwell/continue.
   12V tracks support both **CONTINUE** mode (dwell, then resume in the
@@ -241,11 +266,25 @@ day-1 target):
   reverse direction -- suited to a point-to-point "length" track, exactly
   like the 4.5V shuttle's own back-and-forth behaviour). Which one makes
   sense depends on your track's `topology`; it's not enforced in code.
+  A `length` track's stop point(s) can instead use an **`end-of-line`**
+  sensor -- the 12V equivalent of the 4.5V shuttle's hall-sensor magnet --
+  which triggers the same stop/dwell/resume (+ optional signal) as a
+  `station` sensor. Every 12V sensor role (`block-entry`, `station`,
+  `end-of-line`) has its own `edge` setting, since which edge is more
+  convenient to wire up is a placement choice, not tied to role:
+  `leading` (default, front of train arrives) or `trailing` (back of train
+  clears, i.e. the whole train has come to rest past the sensor).
 - **One 4.5V shuttle line**, with a `location` sensor at each end and one
   junction at each end. On arrival, the Pi looks at which end its own
   sensor just saw the shuttle at, and throws the junction(s) at the
   **opposite** end -- that's the one the shuttle will actually encounter
-  once it reverses.
+  once it reverses. This is intentionally triggered in both paths:
+  the real sensor edge and the shuttle firmware's explicit stopped event
+  both pass through the same opposite-end route-selection helper, so a
+  physical arrival and a simulated arrival behave identically. When a
+  configured junction exists at the target end, the Pi now chooses that
+  route rather than randomly falling back to the main line and leaving the
+  switch in the THROUGH position.
 
 To add a second shuttle line, more zones, more junctions per end, etc.,
 either extend the seed script or use the config API directly (see route
@@ -256,8 +295,10 @@ files under `api/routes/` for the exact shapes -- each mirrors its
 
 `gpio/pinMap.js` is a **deliberate, fixed** numbered-device -> physical-pin
 table, pre-allocated for exactly the hardware currently owned: 4 zone
-drivers, 4 junction slots (2 DRV8833 chips x 2 channels), 6 sensors, 2
-signals. Early in this project a dynamic "pin pool" allocator (grab N free
+drivers, 4 junction slots (2 DRV8833 chips x 2 channels), 6 sensors, 3
+signals (2 DRV8833 chips, one fully used for signals #1/#2, the other's
+channel 1 used for signal #3 -- its channel 2 is spare). Early in this
+project a dynamic "pin pool" allocator (grab N free
 pins per component, reassignable from the UI) was considered and
 deliberately rejected -- this project doesn't need to be flexible for
 hardware it doesn't have; it needs to work well for the specific tracks,
@@ -321,10 +362,15 @@ just one: `ObstacleSensor.onTrigger()` fires when the beam becomes
 blocked (an object has arrived), and the newer `onClear()` fires when it
 becomes unblocked again (the object has left) -- see `gpio/sensor.js`.
 
-For most sensors (block-entry, station stops) only the arrival matters --
-a train passing through is momentary. But a shuttle-line's end-of-line
-location sensor is different: if it's positioned so the parked shuttle
-physically sits right in front of it, the beam stays blocked for the
+For most sensors only the arrival matters -- a train passing through is
+momentary. But every 12V sensor (`block-entry`, `station`, `end-of-line`)
+has an `edge` setting (`leading` default, or `trailing`) that picks
+whether its control logic fires on `onTrigger()` (front of train arrives)
+or `onClear()` (back of train clears) -- see "Config schema" above; which
+one is more convenient depends on physical placement, not the sensor's
+role. Separately, a shuttle-line's
+end-of-line location sensor is different again: if it's positioned so the
+parked shuttle physically sits right in front of it, the beam stays blocked for the
 entire time the shuttle is there, and only clears once it actually pulls
 away. That's a genuine, continuous "is a shuttle at this end right now"
 signal, not just a momentary trigger -- worth using, not throwing away.
@@ -345,7 +391,12 @@ pieces of runtime state per shuttle line as a result:
 Each end-block in the UI has both a **Simulate arrival** and a
 **Simulate departure** button for testing this without physical hardware
 (`POST /api/diagnostics/shuttle-sensors/:sensorId/simulate` and
-`.../simulate-clear`).
+`.../simulate-clear`). The arrival simulation is not just a status mock:
+when the sensor edge is triggered, it also runs the same opposite-end
+route selection as a real shuttle stop, so the junction throw happens in
+both paths and the documentation matches the behavior. If a target end has
+an actual configured junction, the controller now drives that junction
+rather than allowing the route to stay in the THROUGH state by chance.
 
 **Physical placement/tuning is still a hardware task, not a software
 one** -- these IR sensors are typically usable from ~2cm to ~30cm; for
@@ -411,11 +462,12 @@ per type. A few things worth knowing:
 
 ## Known gaps / not yet built
 
-- **Network mode switch / reboot** — implemented and unit-tested against
-  the mock GPIO and a dry-run `nmcli`, but not yet run against a real Pi's
+- **AP mode boot script** — implemented and unit-tested against the mock
+  GPIO and a dry-run `nmcli`, but not yet run against a real Pi's
   NetworkManager. Treat the exact `nmcli` invocations as a first draft to
-  verify on hardware, not a guarantee. See "Network mode switch" below.
-- **4.5V firmware update** — done (see `firmware-4.5v/`), but hasn't been
+  verify on hardware, not a guarantee. See "Network mode (fixed AP)" below.
+- **4.5V firmware update** — done, but lives in its own repo, not this one:
+  https://github.com/Pollocks01/lego-train-controller. Hasn't been
   flashed/tested against real hardware yet.
 - **Multi-train loops, sidings, dynamic pin allocation** — explicitly
   shelved, not planned; see the section below for why and for the design
@@ -544,38 +596,43 @@ Implications for the redesign:
   config authoring UI from the prior design session, since they touch the
   same zone/junction schema.
 
-## Network mode switch (AP vs. home network)
+## Network mode (fixed AP)
 
-A physical 2-way switch lets you flip the Pi between broadcasting its own
-show AP and joining your home WiFi for maintenance, without re-flashing
-anything. How it fits together:
+This Pi is permanently fixed to broadcasting its own show AP -- there used
+to be a physical 2-way switch to flip between AP and joining a home
+network for maintenance, but it was removed (2026-09-23) so its 2 GPIOs
+could go to a 3rd signal instead (see "Hardware pin mapping" above). How
+AP mode fits together:
 
-- **Wiring**: SPDT switch, common → GND, throws → GPIO2 and GPIO3 (see
-  "Wire the AP/home-network switch" above). Read via internal pull-ups,
-  active-low.
-- **When it's read**: once, at boot, by `scripts/apply-network-mode.js`
-  (via the `railway-network-mode.service` systemd unit). Flipping the
-  switch while the Pi is running has no effect until the next reboot --
-  this was a deliberate simplification so the app never has to cope with
-  its own network interface changing out from under it mid-session.
+- **When it's applied**: once, at boot, by `scripts/apply-network-mode.js`
+  (via the `railway-network-mode.service` systemd unit).
 - **Credentials**: stored in the config DB (`Settings.networkApSsid` /
-  `networkApPassword` / `networkStaSsid` / `networkStaPassword`), editable
-  from the UI's collapsed "Network Settings" panel. Saving only writes to
-  the DB -- it doesn't touch live networking, hence "reboot to apply."
+  `networkApPassword`), editable from the UI's collapsed "Network
+  Settings" panel. Saving only writes to the DB -- it doesn't touch live
+  networking, hence "reboot to apply." **Must match the `PI_AP_SSID`/
+  `PI_AP_PASSWORD` constants compiled into the shuttle firmware**
+  (`lego-train-controller` repo) -- those are hardcoded on the firmware
+  side, not configurable at runtime, since the shuttle has no UI of its
+  own for entering them before it's joined a network. The defaults on both
+  sides already match (`PiRailwayController` / `ChangeMe123!`); if you
+  change either one here, you must update the matching constant in the
+  firmware and reflash, or the shuttle will never be able to join the
+  Pi's AP and junction coordination will silently stay in fail-open mode.
 - **Reboot**: the same panel has a "Reboot Pi" button
   (`POST /api/system/reboot`), gated behind an explicit
   `{ confirm: true }` body and a client-side `confirm()` dialog. Requires
   the sudoers rule from the install steps above; without it, the button
   will fail with a clear error rather than silently doing nothing.
-- **Fail-safe default**: if the switch reads ambiguously (unwired, both
-  pins active, mid-throw), it defaults to AP mode -- an exhibition Pi
-  should never end up stuck trying to join a network that isn't there.
 - **Not yet verified against real hardware**: the `nmcli` commands in
   `apply-network-mode.js` are written against documented NetworkManager
   syntax but this sandbox has no real Pi/NetworkManager to test them
   against. Run `RAILWAY_SKIP_NETWORK_APPLY=1 node scripts/apply-network-mode.js`
   first on the real Pi to see exactly what it *would* run before trusting
   it to actually reconfigure networking.
+- `Settings.networkStaSsid`/`networkStaPassword` and `applyStaMode()` in
+  `apply-network-mode.js` are unused leftovers from the removed switch --
+  kept in case STA mode is wanted again later (needs 2 spare GPIOs found
+  first), not currently reachable from anywhere.
 
 ## Web UI
 
@@ -584,7 +641,7 @@ and — per the offline-first requirement above — **nothing loaded from a
 CDN**; every font is a system stack, every script/style is served from the
 Pi itself. It:
 
-- Renders one card per 12V loop (mode/speed/stop controls, live per-zone
+- Renders one card per 12V layout (mode/speed/stop controls, live per-zone
   occupied/powered/dwelling status, live signal-light indicators) and one
   card per 4.5V shuttle line (live east/west arrival indicators, junction
   position + manual throw buttons, registered-shuttle relay controls).
@@ -602,5 +659,5 @@ Pi itself. It:
   directly in the relevant card, since this is meant to double as the
   actual exhibition demo panel, not just a dev tool.
 - A collapsed "Network Settings" panel (bottom of the page) for editing
-  the AP/home-network SSIDs and passwords and triggering a reboot -- see
-  "Network mode switch" above.
+  the AP SSID and password and triggering a reboot -- see
+  "Network mode (fixed AP)" above.

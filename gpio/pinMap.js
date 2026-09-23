@@ -64,31 +64,57 @@ const SENSOR_PINS = {
   6: { chip: NATIVE, pin: 11, physicalPin: 23 },
 };
 
-// --- Signals (2 GPIOs + shared 220ohm pull-up per the brief, bipolar drive
-// for a 2-aspect red/green LEGO signal) ------------------------------------
+// --- Signals (DRV8833 dual-H-bridge driver per pair of signals, PWM'd
+// bipolar drive for a 2-aspect red/green LEGO signal LED) -----------------
+// A direct-from-GPIO bipolar drive (2 logic pins + a shared resistor, no
+// driver chip) was the original approach here and is why signal #1/#2
+// still sit on the same GPIO7/8 and GPIO0/1 pins as before -- but driving
+// an LED straight off a 3.3V GPIO killed a Pi, so those 4 pins are now
+// wired to a DRV8833's AIN1/AIN2 + BIN1/BIN2 logic inputs instead of
+// straight to the LED. The DRV8833's H-bridge outputs (swinging to
+// whatever VM the chip is fed) drive the LED through a single series
+// resistor per signal -- see the wiring notes below. Signal #3 reuses the
+// 2 GPIOs freed up by permanently fixing this Pi to AP-only WiFi (the
+// old network-mode switch's GPIO2/GPIO3, see the note below this map) as
+// a second DRV8833's channel 1.
+//
+// Every entry's `ain1`/`ain2` are logic inputs into one DRV8833 channel:
+// ain1 HIGH + ain2 LOW drives green, ain1 LOW + ain2 HIGH drives red, both
+// LOW is off. Brightness is software-PWMed on whichever pin is active
+// (see gpio/signal.js), exactly like Drv8871's motor-speed PWM.
+//
+// WIRING (per signal, `driverNumber`/`channel` noted per entry):
+//   - DRV8833 VM: feed from the same buck-converter rail used for the
+//     junction DRV8833s (~9V measured -- see README's pin-mapping notes).
+//     Do NOT feed VM from the Pi's 3.3V/5V rail; these H-bridge outputs are
+//     sized for motor current and the LED needs the higher voltage to hit
+//     a sensible resistor value (see below).
+//   - DRV8833 output (AOUT1/AOUT2 or BOUT1/BOUT2) -> one series resistor ->
+//     LED terminal -> other LED terminal -> other DRV8833 output. One
+//     resistor per channel, in series with the LED pair (only one of the
+//     anti-parallel LEDs conducts at a time, so a single resistor sized
+//     for ~15-20mA at VM covers both colours). At VM=9V and a typical LED
+//     Vf of ~2V: R = (9V - 2V) / 0.015A ~= 467ohm -- use a 470ohm (or
+//     560ohm for a dimmer/safer start) 1/4W resistor and tune from there;
+//     do NOT reuse the 220ohm resistor from the direct-GPIO test wiring,
+//     it was sized for a 3.3V swing, not 9V, and will run the LED well
+//     past a safe current.
+//   - DRV8833 logic pins (AIN1/AIN2 or BIN1/BIN2) -> straight to the Pi
+//     GPIOs listed below (3.3V logic, no resistor needed on this side).
+//   - DRV8833 GND -> common GND with the Pi.
 const SIGNAL_PINS = {
-  1: { chip: NATIVE, a: 7, b: 8, aPhysical: 26, bPhysical: 24 },
-  2: { chip: NATIVE, a: 0, b: 1, aPhysical: 27, bPhysical: 28 },
-  3: { chip: NATIVE, a: 28, b: 29, aPhysical: 3, bPhysical: 5 },
-  4: { chip: NATIVE, a: 30, b: 31, aPhysical: 5, bPhysical: 6 },
+  1: { chip: NATIVE, driverNumber: 1, channel: 1, ain1: 7, ain2: 8, ain1Physical: 26, ain2Physical: 24 },
+  2: { chip: NATIVE, driverNumber: 1, channel: 2, ain1: 0, ain2: 1, ain1Physical: 27, ain2Physical: 28 },
+  3: { chip: NATIVE, driverNumber: 2, channel: 1, ain1: 2, ain2: 3, ain1Physical: 3, ain2Physical: 5 },
 };
 
-// --- Network mode switch: a 2-way physical switch selecting AP vs.
-// home-network (STA) mode, read once at boot (see
-// scripts/apply-network-mode.js). Fixed/reserved -- not part of the
-// per-component pool described above, since it's a board-level feature
-// rather than a layout component. GPIO2/GPIO3 are otherwise I2C1's
-// SDA/SCL; they're free in this placeholder map only because nothing
-// here uses I2C yet -- if you later add an MCP23017 GPIO expander (see
-// the note at the top of this file) for pin scaling, move this switch to
-// two different spare pins first, since I2C1 will need GPIO2/GPIO3 back.
-const NETWORK_MODE_SWITCH_PINS = {
-  chip: NATIVE,
-  apPin: 2,
-  staPin: 3,
-  apPhysical: 3,
-  staPhysical: 5,
-};
+// --- Network mode switch: REMOVED (2026-09-23). This Pi is now
+// permanently fixed to AP mode (see scripts/apply-network-mode.js) -- no
+// physical switch, no STA mode, one less thing to wire/break. GPIO2/GPIO3
+// (previously the switch's two throws) are reassigned to Signal #3 above.
+// If STA/home-network mode is ever wanted again, it needs 2 different
+// spare pins found first (there are none left native -- see the header
+// note re: an I2C GPIO expander).
 
 // --- Physical Raspberry Pi 3 Model B header pinout -------------------------
 // This is included to make it easy to wire the custom bus board from the
@@ -102,8 +128,8 @@ const NETWORK_MODE_SWITCH_PINS = {
 // bottom-left as usual. The BCM values are shown for reference.
 //
 //    3V3  (1)  5V   (2)
-//     GPIO2  (3) [NET AP]  5V   (4)
-//     GPIO3  (5) [NET STA] GND  (6)
+//     GPIO2  (3) [Signal 3 driver ain1] 5V   (4)
+//     GPIO3  (5) [Signal 3 driver ain2] GND  (6)
 //     GPIO4  (7) [J2 ch2 ain2] GPIO14 (8) [J2 ch2 ain1]
 //     GND   (9) GPIO15 (10) [J2 ch1 ain2]
 //     GPIO17 (11) [Sensor 1] GPIO18 (12) [J2 ch1 ain1]
@@ -112,9 +138,9 @@ const NETWORK_MODE_SWITCH_PINS = {
 //     3V3   (17) GPIO24 (18) [J1 ch2 ain1]
 //     GPIO10 (19) [Sensor 4] GND   (20)
 //     GPIO9  (21) [Sensor 5] GPIO25 (22) [J1 ch1 ain2]
-//     GPIO11 (23) [Sensor 6] GPIO8  (24) [Signal 1 B]
-//     GND   (25) GPIO7  (26) [Signal 1 A]
-//     GPIO0  (27) [Signal 2 A] GPIO1  (28) [Signal 2 B]
+//     GPIO11 (23) [Sensor 6] GPIO8  (24) [Signal 1 driver ain2]
+//     GND   (25) GPIO7  (26) [Signal 1 driver ain1]
+//     GPIO0  (27) [Signal 2 driver ain1] GPIO1  (28) [Signal 2 driver ain2]
 //     GPIO5  (29) [Zone 1 IN1] GND   (30)
 //     GPIO6  (31) [Zone 1 IN2] GPIO12 (32) [J1 ch1 ain1]
 //     GPIO13 (33) [Zone 2 IN1] GND   (34)
@@ -123,9 +149,12 @@ const NETWORK_MODE_SWITCH_PINS = {
 //     GND   (39) GPIO21 (40) [Zone 3 IN2]
 //
 // Project-specific notes:
-// - Network mode switch: GPIO2 = AP, GPIO3 = STA (physical pins 3 + 5)
+// - Signal driver pins (DRV8833 logic in, see SIGNAL_PINS above for wiring
+//   from the driver's outputs to the LED + resistor):
+//     Signal 1 (driver 1 ch1): GPIO7 / GPIO8
+//     Signal 2 (driver 1 ch2): GPIO0 / GPIO1
+//     Signal 3 (driver 2 ch1): GPIO2 / GPIO3
 // - Sensor pins: GPIO17, GPIO27, GPIO22, GPIO10, GPIO9, GPIO11
-// - Signal pins: GPIO7/GPIO8, GPIO0/GPIO1
 // - Zone driver pins: GPIO5/6, GPIO13/19, GPIO26/21, GPIO20/16
 // - Junction driver pins:
 //     J1 ch1: GPIO12 / GPIO25
@@ -160,14 +189,10 @@ function resolveSignalPins(signalNumber) {
   return entry;
 }
 
-function resolveNetworkModeSwitchPins() {
-  return NETWORK_MODE_SWITCH_PINS;
-}
-
 // --- Pool listings, for the config-authoring UI --------------------------
 // This project intentionally does NOT do dynamic pin allocation -- pins
 // are pre-mapped above for exactly the hardware Paul owns (4 zone
-// drivers, 4 junction slots, 6 sensors, 2 signals). These just expose
+// drivers, 4 junction slots, 6 sensors, 3 signals). These just expose
 // "what numbers exist at all" so the UI can offer a dropdown of numbers
 // not yet claimed by an existing zone/junction/sensor/signal, cross-
 // referenced against the DB in api/routes/inventory.js.
@@ -199,7 +224,6 @@ module.exports = {
   resolveJunctionDriverPins,
   resolveSensorPin,
   resolveSignalPins,
-  resolveNetworkModeSwitchPins,
   listAllZoneDriverNumbers,
   listAllJunctionSlots,
   listAllSensorNumbers,

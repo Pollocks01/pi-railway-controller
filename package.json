@@ -4,11 +4,16 @@
   "description": "Central controller for a LEGO layout: 12V block-controlled trains + 4.5V autonomous shuttle coordination",
   "main": "server.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
     "test:ui-smoke": "node scripts/smoke-test-ui.js",
-    "test:authoring-smoke": "node scripts/smoke-test-authoring.js"
+    "test:authoring-smoke": "node scripts/smoke-test-authoring.js",
+    "test:shuttle-arrival-smoke": "node scripts/smoke-test-shuttle-arrival-routing.js",
+    "test:shuttle-route-stability-smoke": "node scripts/smoke-test-shuttle-route-stability.js"
   },
   "license": "MIT",
   "dependencies": {

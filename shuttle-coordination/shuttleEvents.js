@@ -2,11 +2,21 @@
 
 const ObstacleSensor = require('../gpio/sensor');
 const runtimeState = require('../config/runtimeState');
-const { selectAndThrowRoute } = require('./junctionCoordinator');
+const { selectAndThrowRoute, oppositeEnd } = require('./junctionCoordinator');
 const { Shuttles } = require('../config/configStore');
 
 const sensorInstances = new Map(); // sensorId -> ObstacleSensor
 const sensorUnsubscribers = [];
+const inFlightRouteSelections = new Map(); // shuttleTrackId -> Promise chain
+
+function assertShuttleAssignedForTrack(shuttleTrackId) {
+  const hasAssignedShuttle = Shuttles.list().some((s) => s.shuttle_track_id === shuttleTrackId);
+  if (!hasAssignedShuttle) {
+    const err = new Error('A shuttle must be assigned to this line before arrival simulation or route selection can run');
+    err.statusCode = 409;
+    throw err;
+  }
+}
 
 /**
  * Wires up the two 'location' sensors at either end of a shuttle line so
@@ -29,6 +39,10 @@ function setupLocationSensors(shuttleTrackDetail) {
   for (const sensorRow of shuttleTrackDetail.sensors) {
     if (sensorRow.role !== 'location') continue;
     const sensor = new ObstacleSensor(sensorRow.sensor_number);
+    // Not part of ObstacleSensor itself (it's hardware-only, no config
+    // awareness) -- tagged here so simulateLocationSensorTrigger/Clear()
+    // can find which shuttle track to check for an assigned shuttle.
+    sensor.shuttleTrackId = shuttleTrackDetail.id;
     sensorInstances.set(sensorRow.id, sensor);
 
     const unsubTrigger = sensor.onTrigger(() => {
@@ -36,6 +50,16 @@ function setupLocationSensors(shuttleTrackDetail) {
         lastKnownEnd: sensorRow.end_of_line,
         occupiedEnd: sensorRow.end_of_line,
       });
+
+      // Any arrival at an end must also throw the route at the opposite end,
+      // because that's the junction(s) the shuttle will actually meet next.
+      routeShuttleArrival(shuttleTrackDetail.id, sensorRow.end_of_line)
+        .catch((err) => {
+          console.error(
+            `[shuttleEvents] routeShuttleArrival failed for ${shuttleTrackDetail.id} after sensor ${sensorRow.id} triggered at ${sensorRow.end_of_line}:`,
+            err.message
+          );
+        });
     });
     const unsubClear = sensor.onClear(() => {
       // Only clear if this end was the one marked occupied -- defensive
@@ -50,8 +74,46 @@ function setupLocationSensors(shuttleTrackDetail) {
   }
 }
 
-function oppositeEnd(end) {
-  return end === 'east' ? 'west' : 'east';
+/**
+ * Any time a shuttle is seen arriving at an end, the Pi must throw the
+ * junction(s) at the opposite end: that's the route the shuttle will hit
+ * once it reverses and heads back the other way.
+ *
+ * This helper is intentionally used in BOTH paths:
+ *  - the physical 4.5V location-sensor arrival edge
+ *  - the shuttle firmware's explicit "stopped" event
+ *
+ * That makes the behavior consistent between a real arrival and a manual
+ * diagnostic simulation of the same end-of-line sensor.
+ */
+async function routeShuttleArrival(shuttleTrackId, arrivedAtEnd) {
+  assertShuttleAssignedForTrack(shuttleTrackId);
+  const targetEnd = oppositeEnd(arrivedAtEnd);
+
+  // A real arrival and the shuttle's "stopped" event can happen within a few
+  // milliseconds of each other and both end up here. Queue per-track work so we
+  // process each event in order without dropping newer ones while an older
+  // route throw is still in flight.
+  const previous = inFlightRouteSelections.get(shuttleTrackId) || Promise.resolve();
+  const routePromise = previous.then(async () => {
+    const result = await selectAndThrowRoute('45v', shuttleTrackId, targetEnd);
+    return {
+      ok: true,
+      arrivedAtEnd,
+      targetEnd,
+      ...result,
+    };
+  });
+
+  inFlightRouteSelections.set(shuttleTrackId, routePromise);
+
+  try {
+    return await routePromise;
+  } finally {
+    if (inFlightRouteSelections.get(shuttleTrackId) === routePromise) {
+      inFlightRouteSelections.delete(shuttleTrackId);
+    }
+  }
 }
 
 /**
@@ -71,21 +133,19 @@ async function handleStoppedEvent(shuttleId) {
   }
 
   const trackState = runtimeState.ensureShuttleTrack(shuttle.shuttle_track_id);
-  const currentEnd = trackState.lastKnownEnd;
-  if (currentEnd === 'unknown') {
+  const currentEnd = trackState.lastKnownEnd !== 'unknown' ? trackState.lastKnownEnd : trackState.occupiedEnd;
+  if (!currentEnd || currentEnd === 'unknown') {
     const err = new Error('Pi has not yet observed which end the shuttle is at (no location sensor trigger seen)');
     err.statusCode = 409;
     throw err;
   }
 
-  const targetEnd = oppositeEnd(currentEnd);
-  const result = await selectAndThrowRoute(shuttle.shuttle_track_id, targetEnd);
+  const result = await routeShuttleArrival(shuttle.shuttle_track_id, currentEnd);
 
   return {
-    ok: true,
     permissionToDepart: true,
     currentEnd,
-    targetEnd,
+    targetEnd: result.targetEnd,
     ...result,
   };
 }
@@ -104,6 +164,7 @@ function simulateLocationSensorTrigger(sensorId) {
     err.statusCode = 404;
     throw err;
   }
+  assertShuttleAssignedForTrack(sensor.shuttleTrackId);
   sensor.simulateTrigger();
 }
 
@@ -115,12 +176,14 @@ function simulateLocationSensorClear(sensorId) {
     err.statusCode = 404;
     throw err;
   }
+  assertShuttleAssignedForTrack(sensor.shuttleTrackId);
   sensor.simulateClear();
 }
 
 module.exports = {
   setupLocationSensors,
   handleStoppedEvent,
+  routeShuttleArrival,
   findShuttleByRequestIp,
   simulateLocationSensorTrigger,
   simulateLocationSensorClear,

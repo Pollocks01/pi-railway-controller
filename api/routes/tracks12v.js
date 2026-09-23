@@ -1,8 +1,10 @@
 'use strict';
 
 const express = require('express');
-const { Tracks12v, Zones, Sensors, Trains12v } = require('../../config/configStore');
+const { Tracks12v, Zones, Sensors, Trains12v, Junctions } = require('../../config/configStore');
 const layoutManager = require('../layoutManager');
+const asyncHandler = require('../asyncHandler');
+const { homeJunction } = require('../../shuttle-coordination/junctionCoordinator');
 
 const router = express.Router();
 
@@ -42,7 +44,7 @@ router.delete('/:trackId/zones/:zoneId', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- Sensors (block-entry / station) --------------------------------
+// ---- Sensors (block-entry / station / end-of-line) --------------------
 
 router.post('/:trackId/zones/:zoneId/sensors', (req, res) => {
   const sensor = Sensors.create({ zoneId: req.params.zoneId, ...req.body });
@@ -53,6 +55,24 @@ router.post('/:trackId/zones/:zoneId/sensors', (req, res) => {
 router.delete('/sensors/:sensorId', (req, res) => {
   Sensors.remove(req.params.sensorId);
   layoutManager.buildAll();
+  res.json({ ok: true });
+});
+
+// ---- Junctions (only meaningful on 'length' tracks, mirrors tracks-45v) --
+
+router.post(
+  '/:trackId/junctions',
+  asyncHandler(async (req, res) => {
+    const junction = Junctions.create({ trackKind: '12v', trackId: req.params.trackId, ...req.body });
+    // Never leave a newly-wired junction in an unknown position -- home it
+    // to 'through' the moment it exists, same rule as the boot-time pass.
+    await homeJunction(junction);
+    res.status(201).json(junction);
+  })
+);
+
+router.delete('/junctions/:junctionId', (req, res) => {
+  Junctions.remove(req.params.junctionId);
   res.json({ ok: true });
 });
 

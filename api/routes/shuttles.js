@@ -5,6 +5,7 @@ const asyncHandler = require('../asyncHandler');
 const { Shuttles } = require('../../config/configStore');
 const relay = require('../../shuttle-coordination/relay');
 const runtimeState = require('../../config/runtimeState');
+const { pushProfileTo, pushProfileToAll } = require('../../shuttle-coordination/shuttleConfigProfile');
 
 const router = express.Router();
 
@@ -56,6 +57,27 @@ router.post('/:shuttleId/config', asyncHandler(async (req, res) => {
 
 router.post('/:shuttleId/stop', asyncHandler(async (req, res) => {
   res.json(await relay.stop(req.params.shuttleId));
+}));
+
+// ---- Push the Pi's central 4.5V settings profile down to shuttles -------
+// (dwell/debounce/lockout/ramp/speed/headlight -- see Settings.shuttle45v*
+// in config/configStore.js). Each shuttle is a "slave" of this profile.
+
+router.post('/config/push-all', asyncHandler(async (req, res) => {
+  res.json({ results: await pushProfileToAll() });
+}));
+
+router.post('/:shuttleId/config/push', asyncHandler(async (req, res) => {
+  res.json(await pushProfileTo(req.params.shuttleId));
+}));
+
+router.get('/:shuttleId/headlights', asyncHandler(async (req, res) => {
+  res.json(await relay.getHeadlights(req.params.shuttleId));
+}));
+
+router.post('/:shuttleId/headlights', asyncHandler(async (req, res) => {
+  const enabled = req.body?.enabled ?? req.body?.on ?? false;
+  res.json(await relay.setHeadlights(req.params.shuttleId, !!enabled));
 }));
 
 module.exports = router;

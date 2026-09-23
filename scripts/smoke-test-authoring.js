@@ -108,8 +108,12 @@ async function main() {
   const shuttleTrack = (await (await nodeFetch(`${base}/api/tracks-45v`)).json())[0];
   const westSensor = shuttleTrack.sensors.find((s) => s.end_of_line === 'west');
 
-  const westSimBtn = doc.querySelector('.end-block[data-end="west"] .end-sim-btn');
-  const westClearBtn = doc.querySelector('.end-block[data-end="west"] .end-clear-btn');
+  // Scoped to #tracks45vGrid: 12V 'length' tracks now render an
+  // identically-classed .end-block (same UI parity as the 4.5V shuttle
+  // line), so an unscoped selector would ambiguously match either.
+  const shuttleGrid = doc.getElementById('tracks45vGrid');
+  const westSimBtn = shuttleGrid.querySelector('.end-block[data-end="west"] .end-sim-btn');
+  const westClearBtn = shuttleGrid.querySelector('.end-block[data-end="west"] .end-clear-btn');
 
   westSimBtn.dispatchEvent(new win.Event('click'));
   await new Promise((r) => setTimeout(r, 400));
