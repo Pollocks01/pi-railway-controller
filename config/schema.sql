@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS junctions (
   name                TEXT NOT NULL,
   driver_number       INTEGER NOT NULL,        -- numbered DRV8833 board slot
   driver_channel      INTEGER NOT NULL CHECK (driver_channel IN (1, 2)), -- which of the 2 channels
-  move_duration_ms     INTEGER NOT NULL DEFAULT 200, -- no position feedback assumed; configurable dwell for the move
+  move_duration_ms     INTEGER NOT NULL DEFAULT 350, -- no position feedback assumed; configurable dwell for the move
   route_weight        REAL NOT NULL DEFAULT 1.0,    -- relative weight for the weighted-random route picker
   UNIQUE(driver_number, driver_channel)
 );

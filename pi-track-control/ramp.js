@@ -39,7 +39,7 @@ class SpeedRamp {
   }
 
   _tick() {
-    const { track12vRampStepPercent, track12vRampStepIntervalMs } = this.settingsProvider();
+    const settings = this.settingsProvider();
     const current = this.driver.speedPercent;
     const target = this._target;
 
@@ -48,7 +48,11 @@ class SpeedRamp {
       return;
     }
 
-    const next = this._stepToward(current, target, track12vRampStepPercent);
+    const isRampingUp = Math.abs(target) > Math.abs(current) || (Math.sign(target) !== Math.sign(current) && Math.abs(target) > 0);
+    const stepPercent = isRampingUp ? settings.track12vRampUpStepPercent : settings.track12vRampDownStepPercent;
+    const intervalMs = isRampingUp ? settings.track12vRampUpIntervalMs : settings.track12vRampDownIntervalMs;
+
+    const next = this._stepToward(current, target, stepPercent);
     this.driver.setSpeed(next);
 
     if (next === target) {
@@ -56,7 +60,7 @@ class SpeedRamp {
       return;
     }
 
-    this._timer = setTimeout(() => this._tick(), track12vRampStepIntervalMs);
+    this._timer = setTimeout(() => this._tick(), intervalMs);
     this._timer.unref?.();
   }
 

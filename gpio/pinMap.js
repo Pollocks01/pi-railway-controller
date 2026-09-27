@@ -38,19 +38,34 @@ const ZONE_DRIVER_PINS = {
   4: { chip: NATIVE, in1: 20, in2: 16, in1Physical: 38, in2Physical: 36 },
 };
 
-// --- Junction drivers (DRV8833: dual channel, 4 logic pins per chip -- 2 per
-// channel). driverNumber identifies the physical DRV8833 chip; channel 1/2
-// selects which motor output pair on that chip. ---------------------------
-const JUNCTION_DRIVER_PINS = {
+// --- DRV8833 H-bridge driver channels (unified pool: junctions & signals share)
+// This Pi has 4 physical DRV8833 chips (2 channels each = 8 total channels).
+// Junctions and signals both use DRV8833 channels (ain1/ain2 logic inputs).
+// Layout:
+//   DRV8833 #1: ch1 = J1 junction, ch2 = J1 junction  (both junctions on one chip)
+//   DRV8833 #2: ch1 = J2 junction, ch2 = J2 junction  (both junctions on one chip)
+//   DRV8833 #3: ch1 = Signal 1,   ch2 = Signal 2     (both signals on one chip)
+//   DRV8833 #4: ch1 = Signal 3,   ch2 = [unallocated]
+const DRV8833_CHANNELS = {
   1: {
     chip: NATIVE,
-    1: { ain1: 12, ain2: 25, ain1Physical: 32, ain2Physical: 22 },
-    2: { ain1: 24, ain2: 23, ain1Physical: 18, ain2Physical: 16 },
+    1: { use: 'junction:1:ch1', ain1: 12, ain2: 25, ain1Physical: 32, ain2Physical: 22 },
+    2: { use: 'junction:1:ch2', ain1: 24, ain2: 23, ain1Physical: 18, ain2Physical: 16 },
   },
   2: {
     chip: NATIVE,
-    1: { ain1: 18, ain2: 15, ain1Physical: 12, ain2Physical: 10 },
-    2: { ain1: 14, ain2: 4, ain1Physical: 8, ain2Physical: 7 },
+    1: { use: 'junction:2:ch1', ain1: 18, ain2: 15, ain1Physical: 12, ain2Physical: 10 },
+    2: { use: 'junction:2:ch2', ain1: 14, ain2: 4, ain1Physical: 8, ain2Physical: 7 },
+  },
+  3: {
+    chip: NATIVE,
+    1: { use: 'signal:1', ain1: 7, ain2: 8, ain1Physical: 26, ain2Physical: 24 },
+    2: { use: 'signal:2', ain1: 0, ain2: 1, ain1Physical: 27, ain2Physical: 28 },
+  },
+  4: {
+    chip: NATIVE,
+    1: { use: 'signal:3', ain1: 2, ain2: 3, ain1Physical: 3, ain2Physical: 5 },
+    2: { use: 'unallocated', ain1: null, ain2: null },
   },
 };
 
@@ -64,48 +79,23 @@ const SENSOR_PINS = {
   6: { chip: NATIVE, pin: 11, physicalPin: 23 },
 };
 
-// --- Signals (DRV8833 dual-H-bridge driver per pair of signals, PWM'd
-// bipolar drive for a 2-aspect red/green LEGO signal LED) -----------------
-// A direct-from-GPIO bipolar drive (2 logic pins + a shared resistor, no
-// driver chip) was the original approach here and is why signal #1/#2
-// still sit on the same GPIO7/8 and GPIO0/1 pins as before -- but driving
-// an LED straight off a 3.3V GPIO killed a Pi, so those 4 pins are now
-// wired to a DRV8833's AIN1/AIN2 + BIN1/BIN2 logic inputs instead of
-// straight to the LED. The DRV8833's H-bridge outputs (swinging to
-// whatever VM the chip is fed) drive the LED through a single series
-// resistor per signal -- see the wiring notes below. Signal #3 reuses the
-// 2 GPIOs freed up by permanently fixing this Pi to AP-only WiFi (the
-// old network-mode switch's GPIO2/GPIO3, see the note below this map) as
-// a second DRV8833's channel 1.
-//
-// Every entry's `ain1`/`ain2` are logic inputs into one DRV8833 channel:
-// ain1 HIGH + ain2 LOW drives green, ain1 LOW + ain2 HIGH drives red, both
-// LOW is off. Brightness is software-PWMed on whichever pin is active
-// (see gpio/signal.js), exactly like Drv8871's motor-speed PWM.
-//
-// WIRING (per signal, `driverNumber`/`channel` noted per entry):
-//   - DRV8833 VM: feed from the same buck-converter rail used for the
-//     junction DRV8833s (~9V measured -- see README's pin-mapping notes).
-//     Do NOT feed VM from the Pi's 3.3V/5V rail; these H-bridge outputs are
-//     sized for motor current and the LED needs the higher voltage to hit
-//     a sensible resistor value (see below).
-//   - DRV8833 output (AOUT1/AOUT2 or BOUT1/BOUT2) -> one series resistor ->
-//     LED terminal -> other LED terminal -> other DRV8833 output. One
-//     resistor per channel, in series with the LED pair (only one of the
-//     anti-parallel LEDs conducts at a time, so a single resistor sized
-//     for ~15-20mA at VM covers both colours). At VM=9V and a typical LED
-//     Vf of ~2V: R = (9V - 2V) / 0.015A ~= 467ohm -- use a 470ohm (or
-//     560ohm for a dimmer/safer start) 1/4W resistor and tune from there;
-//     do NOT reuse the 220ohm resistor from the direct-GPIO test wiring,
-//     it was sized for a 3.3V swing, not 9V, and will run the LED well
-//     past a safe current.
-//   - DRV8833 logic pins (AIN1/AIN2 or BIN1/BIN2) -> straight to the Pi
-//     GPIOs listed below (3.3V logic, no resistor needed on this side).
-//   - DRV8833 GND -> common GND with the Pi.
+// --- Signal LED pin resolution (queries unified DRV8833_CHANNELS)
+// Signals are 2-aspect (red/green) LEGO train signal LEDs driven through
+// DRV8833 H-bridge channels for safe current control. See DRV8833_CHANNELS
+// above for physical wiring details. Brightness is software-PWM'd via
+// gpio/signal.js (same approach as motor speed control).
+// WIRING notes for LED side of DRV8833 output:
+//   - DRV8833 VM: ~9V from buck converter (do NOT use Pi's 3.3V/5V rail)
+//   - DRV8833 output -> one series resistor per signal -> LED pair -> other
+//     DRV8833 output. At VM=9V, Vf~2V: R = (9V-2V)/0.015A ~= 467ohm (use
+//     470ohm or 560ohm 1/4W resistor).
+//   - DRV8833 logic pins (AIN1/AIN2 or BIN1/BIN2) -> Pi GPIOs (3.3V logic,
+//     no resistor needed on logic side)
+//   - Common GND with Pi
 const SIGNAL_PINS = {
-  1: { chip: NATIVE, driverNumber: 1, channel: 1, ain1: 7, ain2: 8, ain1Physical: 26, ain2Physical: 24 },
-  2: { chip: NATIVE, driverNumber: 1, channel: 2, ain1: 0, ain2: 1, ain1Physical: 27, ain2Physical: 28 },
-  3: { chip: NATIVE, driverNumber: 2, channel: 1, ain1: 2, ain2: 3, ain1Physical: 3, ain2Physical: 5 },
+  1: { driverNumber: 3, channel: 1 },
+  2: { driverNumber: 3, channel: 2 },
+  3: { driverNumber: 4, channel: 1 },
 };
 
 // --- Network mode switch: REMOVED (2026-09-23). This Pi is now
@@ -128,39 +118,33 @@ const SIGNAL_PINS = {
 // bottom-left as usual. The BCM values are shown for reference.
 //
 //    3V3  (1)  5V   (2)
-//     GPIO2  (3) [Signal 3 driver ain1] 5V   (4)
-//     GPIO3  (5) [Signal 3 driver ain2] GND  (6)
-//     GPIO4  (7) [J2 ch2 ain2] GPIO14 (8) [J2 ch2 ain1]
-//     GND   (9) GPIO15 (10) [J2 ch1 ain2]
-//     GPIO17 (11) [Sensor 1] GPIO18 (12) [J2 ch1 ain1]
+//     GPIO2  (3) [DRV8833#4 ch1 ain1] 5V   (4)    [Signal 3 ain1]
+//     GPIO3  (5) [DRV8833#4 ch1 ain2] GND  (6)    [Signal 3 ain2]
+//     GPIO4  (7) [DRV8833#2 ch2 ain2] GPIO14 (8) [DRV8833#2 ch2 ain1]
+//     GND   (9) GPIO15 (10) [DRV8833#2 ch1 ain2] [J2 ch1 ain2]
+//     GPIO17 (11) [Sensor 1] GPIO18 (12) [DRV8833#2 ch1 ain1] [J2 ch1 ain1]
 //     GPIO27 (13) [Sensor 2] GND   (14)
-//     GPIO22 (15) [Sensor 3] GPIO23 (16) [J1 ch2 ain2]
-//     3V3   (17) GPIO24 (18) [J1 ch2 ain1]
+//     GPIO22 (15) [Sensor 3] GPIO23 (16) [DRV8833#1 ch2 ain2] [J1 ch2 ain2]
+//     3V3   (17) GPIO24 (18) [DRV8833#1 ch2 ain1] [J1 ch2 ain1]
 //     GPIO10 (19) [Sensor 4] GND   (20)
-//     GPIO9  (21) [Sensor 5] GPIO25 (22) [J1 ch1 ain2]
-//     GPIO11 (23) [Sensor 6] GPIO8  (24) [Signal 1 driver ain2]
-//     GND   (25) GPIO7  (26) [Signal 1 driver ain1]
-//     GPIO0  (27) [Signal 2 driver ain1] GPIO1  (28) [Signal 2 driver ain2]
+//     GPIO9  (21) [Sensor 5] GPIO25 (22) [DRV8833#1 ch1 ain2] [J1 ch1 ain2]
+//     GPIO11 (23) [Sensor 6] GPIO8  (24) [DRV8833#3 ch1 ain2] [Signal 1 ain2]
+//     GND   (25) GPIO7  (26) [DRV8833#3 ch1 ain1] [Signal 1 ain1]
+//     GPIO0  (27) [DRV8833#3 ch2 ain1] [Signal 2 ain1]  GPIO1  (28) [DRV8833#3 ch2 ain2] [Signal 2 ain2]
 //     GPIO5  (29) [Zone 1 IN1] GND   (30)
-//     GPIO6  (31) [Zone 1 IN2] GPIO12 (32) [J1 ch1 ain1]
+//     GPIO6  (31) [Zone 1 IN2] GPIO12 (32) [DRV8833#1 ch1 ain1] [J1 ch1 ain1]
 //     GPIO13 (33) [Zone 2 IN1] GND   (34)
 //     GPIO19 (35) [Zone 2 IN2] GPIO16 (36) [Zone 4 IN2]
 //     GPIO26 (37) [Zone 3 IN1] GPIO20 (38) [Zone 4 IN1]
 //     GND   (39) GPIO21 (40) [Zone 3 IN2]
 //
-// Project-specific notes:
-// - Signal driver pins (DRV8833 logic in, see SIGNAL_PINS above for wiring
-//   from the driver's outputs to the LED + resistor):
-//     Signal 1 (driver 1 ch1): GPIO7 / GPIO8
-//     Signal 2 (driver 1 ch2): GPIO0 / GPIO1
-//     Signal 3 (driver 2 ch1): GPIO2 / GPIO3
+// Unified DRV8833 Channel Allocation (see DRV8833_CHANNELS above):
+//   DRV8833 #1: ch1=J1 junction ch1 (GPIO12/25)  ch2=J1 junction ch2 (GPIO24/23)
+//   DRV8833 #2: ch1=J2 junction ch1 (GPIO18/15)  ch2=J2 junction ch2 (GPIO14/4)
+//   DRV8833 #3: ch1=Signal 1 (GPIO7/8)          ch2=Signal 2 (GPIO0/1)
+//   DRV8833 #4: ch1=Signal 3 (GPIO2/3)          ch2=[unallocated]
 // - Sensor pins: GPIO17, GPIO27, GPIO22, GPIO10, GPIO9, GPIO11
-// - Zone driver pins: GPIO5/6, GPIO13/19, GPIO26/21, GPIO20/16
-// - Junction driver pins:
-//     J1 ch1: GPIO12 / GPIO25
-//     J1 ch2: GPIO24 / GPIO23
-//     J2 ch1: GPIO18 / GPIO15
-//     J2 ch2: GPIO14 / GPIO4
+// - Zone (12V motor) driver pins: GPIO5/6, GPIO13/19, GPIO26/21, GPIO20/16 (DRV8871)
 
 
 function resolveZoneDriverPins(driverNumber) {
@@ -170,9 +154,14 @@ function resolveZoneDriverPins(driverNumber) {
 }
 
 function resolveJunctionDriverPins(driverNumber, channel) {
-  const chip = JUNCTION_DRIVER_PINS[driverNumber];
+  // Map junction number to DRV8833 chip: J1->DRV8833#1, J2->DRV8833#2
+  const drv8833Number = driverNumber === 1 ? 1 : driverNumber === 2 ? 2 : null;
+  if (!drv8833Number) {
+    throw new Error(`No junction driver mapping for junction #${driverNumber} -- only junctions 1-2 exist`);
+  }
+  const chip = DRV8833_CHANNELS[drv8833Number];
   if (!chip || !chip[channel]) {
-    throw new Error(`No pin mapping for junction driver #${driverNumber} channel ${channel} -- add one to gpio/pinMap.js`);
+    throw new Error(`No channel mapping for DRV8833 #${drv8833Number} channel ${channel}`);
   }
   return { chip: chip.chip, ...chip[channel] };
 }
@@ -185,8 +174,14 @@ function resolveSensorPin(sensorNumber) {
 
 function resolveSignalPins(signalNumber) {
   const entry = SIGNAL_PINS[signalNumber];
-  if (!entry) throw new Error(`No pin mapping for signal #${signalNumber} -- add one to gpio/pinMap.js`);
-  return entry;
+  if (!entry) throw new Error(`No pin mapping for signal #${signalNumber} -- add one to SIGNAL_PINS`);
+  const { driverNumber, channel } = entry;
+  const chip = DRV8833_CHANNELS[driverNumber];
+  if (!chip || !chip[channel]) {
+    throw new Error(`DRV8833 #${driverNumber} channel ${channel} not found for signal #${signalNumber}`);
+  }
+  // Return all properties from the channel entry (ain1, ain2, ain1Physical, ain2Physical, use, etc.)
+  return { chip: chip.chip, driverNumber, channel, ...chip[channel] };
 }
 
 // --- Pool listings, for the config-authoring UI --------------------------
@@ -202,10 +197,13 @@ function listAllZoneDriverNumbers() {
 
 function listAllJunctionSlots() {
   const slots = [];
-  for (const [driverNumber, chip] of Object.entries(JUNCTION_DRIVER_PINS)) {
-    for (const channel of Object.keys(chip)) {
+  for (const [drv8833Number, chip] of Object.entries(DRV8833_CHANNELS)) {
+    for (const [channel, entry] of Object.entries(chip)) {
       if (channel === 'chip') continue;
-      slots.push({ driverNumber: Number(driverNumber), channel: Number(channel) });
+      // Only include channels marked for junction use
+      if (entry.use && entry.use.startsWith('junction:')) {
+        slots.push({ driverNumber: Number(drv8833Number), channel: Number(channel) });
+      }
     }
   }
   return slots;

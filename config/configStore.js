@@ -208,7 +208,7 @@ const Junctions = {
     if (!row) notFound(`Junction ${id} not found`);
     return row;
   },
-  create({ trackKind, trackId, end, name, driverNumber, driverChannel, moveDurationMs = 200, routeWeight = 1.0 }) {
+  create({ trackKind, trackId, end, name, driverNumber, driverChannel, moveDurationMs = 350, routeWeight = 1.0 }) {
     assert(['12v', '45v'].includes(trackKind), "trackKind must be '12v' or '45v'");
     if (trackKind === '45v') Tracks45v.get(trackId);
     else Tracks12v.get(trackId);
@@ -381,8 +381,10 @@ const DEFAULT_SETTINGS = {
   // ---- 12V track settings (this controller's own track-control loop) ----
   track12vDwellMsMin: 4000,
   track12vDwellMsMax: 7000,
-  track12vRampStepPercent: 4,
-  track12vRampStepIntervalMs: 25,
+  track12vRampUpStepPercent: 4,
+  track12vRampUpIntervalMs: 25,
+  track12vRampDownStepPercent: 8,
+  track12vRampDownIntervalMs: 15,
   // 12V motors don't run well slowly, and can run too fast/hot at full
   // Vm -- map the -100..+100 slider onto -max..-min / +min..+max, mirroring
   // the shuttle firmware's MOTOR_MIN_PERCENT approach but expressed as
@@ -402,9 +404,17 @@ const DEFAULT_SETTINGS = {
   // moving, so a train edging forward off the same sensor can't
   // immediately re-trigger a stop.
   track12vStationLockoutMs: 2000,
+  // CONTINUE mode station-stop probability range: each time the train hits
+  // a station, pick a random % between min and max, then decide whether to
+  // stop based on that. Useful for small layouts where constant stops would
+  // be tedious but you want some variety. Both 0 = never stop, both 100 =
+  // always stop (like SHUTTLE mode), 20-40 = stop roughly 20-40% of passes
+  // (varies each time).
+  track12vContinueModeProbabilityPercentMin: 20,
+  track12vContinueModeProbabilityPercentMax: 40,
   // Shared by 12V and 4.5V junction motors (same DRV8833 hardware/pulse
   // model either way).
-  junctionDefaultMoveDurationMs: 200,
+  junctionDefaultMoveDurationMs: 350,
 
   // ---- 4.5V shuttle settings (pushed down to shuttles' own /config) ----
   // The Pi is the single source of truth for these -- each shuttle is a

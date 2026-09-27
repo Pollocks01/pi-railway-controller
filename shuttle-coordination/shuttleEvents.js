@@ -75,25 +75,20 @@ function setupLocationSensors(shuttleTrackDetail) {
 }
 
 /**
- * Any time a shuttle is seen arriving at an end, the Pi must throw the
- * junction(s) at the opposite end: that's the route the shuttle will hit
- * once it reverses and heads back the other way.
+ * Any time a shuttle is seen arriving at an end via obstacle sensor, the Pi
+ * must throw the junction(s) at the opposite end: that's the route the shuttle
+ * will hit once it reverses and heads back the other way.
  *
- * This helper is intentionally used in BOTH paths:
- *  - the physical 4.5V location-sensor arrival edge
- *  - the shuttle firmware's explicit "stopped" event
- *
- * That makes the behavior consistent between a real arrival and a manual
- * diagnostic simulation of the same end-of-line sensor.
+ * This is called ONLY when the physical obstacle sensor at the end is triggered.
+ * The shuttle's "stopped" event is NOT routed here -- junctions are driven by
+ * obstacle sensor arrivals, which are present on both 4.5V and 12V subsystems.
  */
 async function routeShuttleArrival(shuttleTrackId, arrivedAtEnd) {
   assertShuttleAssignedForTrack(shuttleTrackId);
   const targetEnd = oppositeEnd(arrivedAtEnd);
 
-  // A real arrival and the shuttle's "stopped" event can happen within a few
-  // milliseconds of each other and both end up here. Queue per-track work so we
-  // process each event in order without dropping newer ones while an older
-  // route throw is still in flight.
+  // Queue per-track work so if multiple sensors trigger in quick succession,
+  // we process each route selection in order without dropping events.
   const previous = inFlightRouteSelections.get(shuttleTrackId) || Promise.resolve();
   const routePromise = previous.then(async () => {
     const result = await selectAndThrowRoute('45v', shuttleTrackId, targetEnd);
@@ -117,36 +112,28 @@ async function routeShuttleArrival(shuttleTrackId, arrivedAtEnd) {
 }
 
 /**
- * Called when a registered shuttle POSTs its "I have stopped" event. Looks
- * up which end of the line the Pi's own sensors last saw the shuttle at,
- * then selects + throws a route for the junctions at the OPPOSITE end --
- * that's the end the shuttle will actually encounter once it reverses and
- * heads back the other way -- and returns the permission-to-depart payload
- * the shuttle is waiting on.
+ * Called when a registered shuttle POSTs its "I have stopped" event.
+ *
+ * Junction routing is driven ONLY by obstacle sensor arrivals (same for both
+ * 4.5V and 12V subsystems). The shuttle's "stopped" event is just an
+ * acknowledgment that we can send the permission-to-depart payload back to
+ * the shuttle firmware so it knows it's safe to reverse.
+ *
+ * @param {string} shuttleId
+ * @returns {Promise<{permissionToDepart: boolean}>}
  */
 async function handleStoppedEvent(shuttleId) {
   const shuttle = Shuttles.get(shuttleId);
   if (!shuttle.shuttle_track_id) {
-    const err = new Error('Shuttle is not assigned to a 4.5V track; cannot coordinate junctions');
+    const err = new Error('Shuttle is not assigned to a 4.5V track');
     err.statusCode = 409;
     throw err;
   }
 
-  const trackState = runtimeState.ensureShuttleTrack(shuttle.shuttle_track_id);
-  const currentEnd = trackState.lastKnownEnd !== 'unknown' ? trackState.lastKnownEnd : trackState.occupiedEnd;
-  if (!currentEnd || currentEnd === 'unknown') {
-    const err = new Error('Pi has not yet observed which end the shuttle is at (no location sensor trigger seen)');
-    err.statusCode = 409;
-    throw err;
-  }
-
-  const result = await routeShuttleArrival(shuttle.shuttle_track_id, currentEnd);
-
+  // Obstacle sensors (present on both 4.5V and 12V) trigger junction routing.
+  // The "stopped" event just confirms the shuttle is halted and ready to reverse.
   return {
     permissionToDepart: true,
-    currentEnd,
-    targetEnd: result.targetEnd,
-    ...result,
   };
 }
 

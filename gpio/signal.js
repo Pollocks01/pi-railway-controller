@@ -15,7 +15,7 @@ const PWM_PERIOD_MS = 20; // 50Hz-ish
  * direct-from-GPIO bipolar drive -- driving the LED straight off a 3.3V
  * GPIO with only a series resistor killed a Pi, so the GPIOs now only
  * ever drive the DRV8833's logic inputs, and the H-bridge + a resistor
- * sized for its VM (see gpio/pinMap.js SIGNAL_PINS) does the actual LED
+ * sized for its VM (see gpio/pinMap.js DRV8833_CHANNELS) does the actual LED
  * driving. Brightness control (like Drv8871's motor-speed PWM, and the
  * lego-train-controller firmware's headlight PWM) makes this a variable
  * signal rather than a plain on/off one.
