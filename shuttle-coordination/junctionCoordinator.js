@@ -73,13 +73,13 @@ async function selectAndThrowRoute(trackKind, trackId, end) {
   const options = [{ kind: 'main', weight: MAIN_LINE_WEIGHT }, ...junctions.map((j) => ({ kind: 'junction', junction: j, weight: j.route_weight }))];
   const chosen = weightedPick(options, (o) => o.weight);
 
-  const allTrackJunctions = Junctions.listForTrack(trackKind, trackId);
-
-  // Reset every junction on the shuttle track before throwing the selected
-  // route. Otherwise the previously chosen branch can stay in its diverging
-  // state and later arrivals appear to do nothing because a stale switch is
-  // already left in the wrong position.
-  const moves = allTrackJunctions.map((junction) => {
+  // Reset every junction AT THIS END (not the whole track -- the other end's
+  // junction(s) belong to a separate routing decision and must be left alone,
+  // otherwise every arrival also re-pulses the junction the train just used
+  // to arrive). Otherwise a previously chosen branch at this end can stay in
+  // its diverging state and a later arrival back at this same end appears to
+  // do nothing because a stale switch is already left in the wrong position.
+  const moves = junctions.map((junction) => {
     const channel = getChannel(junction);
     const throwToB = chosen.kind === 'junction' && chosen.junction.id === junction.id;
     runtimeState.updateJunction(junction.id, { position: throwToB ? 'diverging' : 'through', moving: true });

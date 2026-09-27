@@ -211,6 +211,17 @@ class TrackController {
     const machine = this.zoneStationMachines.get(zone.id);
     if (!machine || !machine.canAccept()) return;
 
+    // In CONTINUE mode, use probabilistic stop (may cruise through without stopping).
+    // SHUTTLE mode always stops. Pick a random probability within the configured
+    // range for this particular station hit.
+    if (this.mode === MODE.CONTINUE) {
+      const settings = this.settingsProvider();
+      const minProb = settings.track12vContinueModeProbabilityPercentMin;
+      const maxProb = settings.track12vContinueModeProbabilityPercentMax;
+      const chosenProb = minProb + Math.random() * (maxProb - minProb);
+      if (Math.random() * 100 >= chosenProb) return; // skip stop this time
+    }
+
     runtimeState.update12vZone(this.trackId, zone.id, { stationAction: 'stopping' });
     this._setSignalForSensor(sensorRow.id, 'red');
 

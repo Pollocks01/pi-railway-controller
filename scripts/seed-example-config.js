@@ -39,7 +39,7 @@ function main() {
     name: 'East siding junction',
     driverNumber: 2,
     driverChannel: 1,
-    moveDurationMs: 200,
+    moveDurationMs: 350,
     routeWeight: 1.0,
   });
   Junctions.create({
@@ -49,7 +49,7 @@ function main() {
     name: 'West siding junction',
     driverNumber: 2,
     driverChannel: 2,
-    moveDurationMs: 200,
+    moveDurationMs: 350,
     routeWeight: 1.0,
   });
   // Trains12v.create({ name: 'Length 1 train', trackId: length1.id, startingZoneId: length1Zone.id });
@@ -67,7 +67,7 @@ function main() {
     name: 'East siding junction',
     driverNumber: 1,
     driverChannel: 1,
-    moveDurationMs: 200,
+    moveDurationMs: 350,
     routeWeight: 1.0,
   });
   Junctions.create({
@@ -77,7 +77,7 @@ function main() {
     name: 'West siding junction',
     driverNumber: 1,
     driverChannel: 2,
-    moveDurationMs: 200,
+    moveDurationMs: 350,
     routeWeight: 1.0,
   });
 

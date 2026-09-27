@@ -63,7 +63,7 @@ for real hardware activity.
 4. Wire the signal LED drivers and, if this is the first time wiring
    them up, note that GPIO2/GPIO3 no longer carry the (removed) AP/
    home-network switch -- they now go to a DRV8833 channel for Signal #3.
-   See `gpio/pinMap.js` (`SIGNAL_PINS`) for the full per-signal wiring
+   See `gpio/pinMap.js` (`DRV8833_CHANNELS`) for the full per-signal wiring
    notes, including the series resistor value.
 5. Set up the boot-time network script and a passwordless-reboot sudo rule:
 
@@ -275,14 +275,13 @@ day-1 target):
   `leading` (default, front of train arrives) or `trailing` (back of train
   clears, i.e. the whole train has come to rest past the sensor).
 - **One 4.5V shuttle line**, with a `location` sensor at each end and one
-  junction at each end. On arrival, the Pi looks at which end its own
-  sensor just saw the shuttle at, and throws the junction(s) at the
-  **opposite** end -- that's the one the shuttle will actually encounter
-  once it reverses. This is intentionally triggered in both paths:
-  the real sensor edge and the shuttle firmware's explicit stopped event
-  both pass through the same opposite-end route-selection helper, so a
-  physical arrival and a simulated arrival behave identically. When a
-  configured junction exists at the target end, the Pi now chooses that
+  junction at each end. On arrival, the Pi's obstacle sensor detects which
+  end the shuttle reached, and throws the junction(s) at the **opposite** end
+  -- that's the one the shuttle will actually encounter once it reverses.
+  Junction routing is driven by obstacle sensor arrivals only (both 4.5V and
+  12V systems work this way). The shuttle's "stopped" event is just a simple
+  acknowledgment; it doesn't trigger routing. When a configured junction
+  exists at the target end, the Pi now chooses that
   route rather than randomly falling back to the main line and leaving the
   switch in the THROUGH position.
 
@@ -311,8 +310,9 @@ The **BCM pin numbers themselves** are still placeholders and do need
 checking against the real breakout board before wiring anything up:
 
 1. Open `gpio/pinMap.js`.
-2. Replace the BCM pin numbers in `ZONE_DRIVER_PINS`, `JUNCTION_DRIVER_PINS`,
-   `SENSOR_PINS`, and `SIGNAL_PINS` to match your board.
+2. Replace the BCM pin numbers in `ZONE_DRIVER_PINS`, `DRV8833_CHANNELS`,
+   `SENSOR_PINS` to match your board (both junction and signal pins come
+   from unified DRV8833_CHANNELS pool).
 3. If you ever do need more devices than a Pi 3B's ~26 GPIOs can address
    directly, each entry supports a `chip` field for exactly this reason --
    swap `chip: 'native'` for an I2C GPIO expander address (e.g. MCP23017)
@@ -322,10 +322,14 @@ checking against the real breakout board before wiring anything up:
    codebase cares how a pin is physically addressed.)
 
 Also placeholder/needs-verification: junction `move_duration_ms` (default
-200ms per the real LEGO 19802 switch motor spec -- there's no position
-feedback assumed, so this is a timed pulse, not a held voltage; tune the
-default against your actual motors once wired up), and the buck-converter
-output feeding the DRV8833 (brief says ~9V, measured).
+350ms -- the real LEGO 19802 switch motor spec calls for ~200ms at nominal
+9-12V, but this layout runs its DRV8833 VM off an ~8V buck converter, so
+the default is set higher to give the lower-torque motor enough time to
+fully throw; there's no position feedback assumed, so this is a timed
+pulse, not a held voltage -- tune per-junction via the "Move duration (ms)"
+field on the Add Junction dialog if a specific motor is still unreliable),
+and the buck-converter output feeding the DRV8833 (brief says ~9V, measured
+~8V in practice).
 
 ## Junctions always start in the "through" position -- actively, not assumed
 

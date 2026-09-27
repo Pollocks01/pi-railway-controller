@@ -9,6 +9,15 @@ This repo: https://github.com/Pollocks01/pi-railway-controller
 
 ## Status: fully built, tested, and working
 
+- **2026-09-27: default junction pulse duration raised 200ms -> 350ms.**
+  Real hardware runs its DRV8833 VM off an ~8V buck converter (lower than
+  the 9-12V the LEGO 19802 switch motor spec assumes), so the shorter
+  pulse wasn't always reliably completing the throw on one junction. Also
+  wired up `Settings.junctionDefaultMoveDurationMs` -- it existed in the
+  settings panel already but was never actually read anywhere; the "Add
+  Junction" dialog now uses it as the default instead of a hardcoded 200.
+  There's still no junction-edit endpoint, so fixing an already-created
+  junction means deleting and re-adding it with a higher per-junction value.
 - **2026-09-23: signals moved off direct-GPIO drive onto DRV8833 + PWM
   brightness, network switch removed.** Driving a bare LED straight off a
   3.3V GPIO with only a series resistor blew a Pi. Signals #1/#2 now sit
@@ -20,7 +29,7 @@ This repo: https://github.com/Pollocks01/pi-railway-controller
   PWM (new `Settings.signalBrightnessPercent`, default 70). The physical
   AP/home-network switch was removed (this Pi is now fixed to AP-only) to
   free its 2 GPIOs for a 3rd signal, since that's exactly the 2 spare pins
-  a new DRV8833 channel needs. See `gpio/pinMap.js` (`SIGNAL_PINS` wiring
+  a new DRV8833 channel needs. See `gpio/pinMap.js` (`DRV8833_CHANNELS` wiring
   notes, incl. the resistor value math) and `gpio/signal.js`.
 - Full Node/Express backend: SQLite config store, in-memory runtime
   state + debounced snapshotting, GPIO abstraction (real `onoff` on the
@@ -44,7 +53,8 @@ This repo: https://github.com/Pollocks01/pi-railway-controller
   to through once at boot (before the server accepts connections) and
   immediately on creation, rather than left in an unknown state until
   first use. Default pulse duration also corrected 700ms -> 200ms to
-  match the real LEGO 19802 switch motor spec. The pulse-then-coast
+  match the real LEGO 19802 switch motor spec (see 2026-09-27 entry above
+  for the later 8V-driven bump to 350ms). The pulse-then-coast
   behavior itself (`Drv8833Channel.throw_()`) was already correct --
   never held voltage -- this fix was purely about the missing defined
   starting state.

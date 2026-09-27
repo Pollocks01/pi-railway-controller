@@ -12,7 +12,7 @@ const { resolveJunctionDriverPins } = require('./pinMap');
  * reading.
  */
 class Drv8833Channel {
-  constructor(driverNumber, channel, moveDurationMs = 200) {
+  constructor(driverNumber, channel, moveDurationMs = 350) {
     this.driverNumber = driverNumber;
     this.channel = channel;
     this.moveDurationMs = moveDurationMs;

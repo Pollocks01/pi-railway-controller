@@ -2,7 +2,6 @@
 
 const { Shuttles } = require('../config/configStore');
 const runtimeState = require('../config/runtimeState');
-const { pushProfileTo } = require('./shuttleConfigProfile');
 
 /**
  * Handles the shuttle's boot-time POST /register. Registration is
@@ -19,6 +18,10 @@ function registerShuttle({ ipAddress, macAddress, firmwareVersion }) {
     online: true,
     ipAddress: shuttle.ip_address,
   });
+  // Required lazily (not at module top level) to avoid a require cycle with
+  // relay.js (relay -> registry -> shuttleConfigProfile -> relay), which left
+  // shuttleConfigProfile.js holding a stale, pre-export copy of relay.js.
+  const { pushProfileTo } = require('./shuttleConfigProfile');
   // Sync the Pi's central 4.5V settings profile onto the shuttle every time
   // it (re)registers -- it's a "slave" of the Pi's settings, not configured
   // independently. Fire-and-forget: a slow/unreachable shuttle shouldn't

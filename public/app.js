@@ -216,7 +216,7 @@ async function triggerAddLocationSensor(track, end) {
 }
 
 async function triggerAddJunction(track, end) {
-  const inventory = await getInventory();
+  const [inventory, settings] = await Promise.all([getInventory(), getJson('/api/settings')]);
   const slotOptions =
     inventory.availableJunctionSlots.length === 0
       ? [{ value: '', label: '(none free -- delete something first)' }]
@@ -230,7 +230,7 @@ async function triggerAddJunction(track, end) {
     fields: [
       { name: 'name', label: 'Name', type: 'text', required: true, defaultValue: `${end} junction` },
       { name: 'slot', label: 'Driver / channel', type: 'select', options: slotOptions },
-      { name: 'moveDurationMs', label: 'Move duration (ms)', type: 'number', min: 100, defaultValue: 200 },
+      { name: 'moveDurationMs', label: 'Move duration (ms)', type: 'number', min: 100, defaultValue: settings.junctionDefaultMoveDurationMs },
       { name: 'routeWeight', label: 'Route weight', type: 'number', min: 0.1, defaultValue: 1 },
     ],
     onSubmit: (data) => {
@@ -277,7 +277,7 @@ async function triggerAddEndSensor12v(track, end) {
 }
 
 async function triggerAddJunction12v(track, end) {
-  const inventory = await getInventory();
+  const [inventory, settings] = await Promise.all([getInventory(), getJson('/api/settings')]);
   const slotOptions =
     inventory.availableJunctionSlots.length === 0
       ? [{ value: '', label: '(none free -- delete something first)' }]
@@ -291,7 +291,7 @@ async function triggerAddJunction12v(track, end) {
     fields: [
       { name: 'name', label: 'Name', type: 'text', required: true, defaultValue: `${end} junction` },
       { name: 'slot', label: 'Driver / channel', type: 'select', options: slotOptions },
-      { name: 'moveDurationMs', label: 'Move duration (ms)', type: 'number', min: 100, defaultValue: 200 },
+      { name: 'moveDurationMs', label: 'Move duration (ms)', type: 'number', min: 100, defaultValue: settings.junctionDefaultMoveDurationMs },
       { name: 'routeWeight', label: 'Route weight', type: 'number', min: 0.1, defaultValue: 1 },
     ],
     onSubmit: (data) => {
@@ -420,12 +420,16 @@ async function initSettingsPanel() {
     ['settingsDwellMsMax', 'track12vDwellMsMax'],
     ['settingsStationLockoutMs', 'track12vStationLockoutMs'],
     ['settingsSensorDebounceMs', 'track12vSensorDebounceMs'],
-    ['settingsRampStepPercent', 'track12vRampStepPercent'],
-    ['settingsRampStepIntervalMs', 'track12vRampStepIntervalMs'],
+    ['settingsRampUpStepPercent', 'track12vRampUpStepPercent'],
+    ['settingsRampUpIntervalMs', 'track12vRampUpIntervalMs'],
+    ['settingsRampDownStepPercent', 'track12vRampDownStepPercent'],
+    ['settingsRampDownIntervalMs', 'track12vRampDownIntervalMs'],
     ['settingsTrain12vMinMotorPercent', 'track12vMinMotorPercent'],
     ['settingsTrain12vMaxMotorPercent', 'track12vMaxMotorPercent'],
     ['settingsJunctionDefaultMoveDurationMs', 'junctionDefaultMoveDurationMs'],
     ['settingsSignalBrightnessPercent', 'signalBrightnessPercent'],
+    ['settingsContinueModeProbabilityPercentMin', 'track12vContinueModeProbabilityPercentMin'],
+    ['settingsContinueModeProbabilityPercentMax', 'track12vContinueModeProbabilityPercentMax'],
   ];
 
   const saveBtn = document.getElementById('settingsSaveBtn');

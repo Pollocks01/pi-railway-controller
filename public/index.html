@@ -89,13 +89,34 @@
           </fieldset>
 
           <fieldset class="network-fieldset">
-            <legend>12V speed ramp</legend>
-            <label class="field-label">Ramp step (%)
-              <input type="number" id="settingsRampStepPercent" min="1" max="100" step="1">
+            <legend>12V speed ramp (acceleration)</legend>
+            <label class="field-label">Ramp-up step (%)
+              <input type="number" id="settingsRampUpStepPercent" min="1" max="100" step="1">
             </label>
-            <label class="field-label">Ramp interval (ms)
-              <input type="number" id="settingsRampStepIntervalMs" min="1" step="5">
+            <label class="field-label">Ramp-up interval (ms)
+              <input type="number" id="settingsRampUpIntervalMs" min="1" step="5">
             </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>12V speed ramp (deceleration)</legend>
+            <label class="field-label">Ramp-down step (%)
+              <input type="number" id="settingsRampDownStepPercent" min="1" max="100" step="1">
+            </label>
+            <label class="field-label">Ramp-down interval (ms)
+              <input type="number" id="settingsRampDownIntervalMs" min="1" step="5">
+            </label>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
+            <legend>CONTINUE mode behaviour</legend>
+            <label class="field-label">Station stop probability min (%)
+              <input type="number" id="settingsContinueModeProbabilityPercentMin" min="0" max="100" step="1">
+            </label>
+            <label class="field-label">Station stop probability max (%)
+              <input type="number" id="settingsContinueModeProbabilityPercentMax" min="0" max="100" step="1">
+            </label>
+            <span class="hint-inline">Range per station hit: 0-0=never, 100-100=always, 20-40=random 20-40%</span>
           </fieldset>
 
           <fieldset class="network-fieldset">
