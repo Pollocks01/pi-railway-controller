@@ -2,8 +2,14 @@
 
 const { Tracks45v, Sensors } = require('../config/configStore');
 const { routeShuttleArrival } = require('../shuttle-coordination/shuttleEvents');
+const layoutManager = require('../api/layoutManager');
 
 async function main() {
+  // Build the layout first, same as server.js does at boot -- this is
+  // what registers the JunctionEndGroup(s) that routeShuttleArrival's
+  // compat wrapper looks up.
+  layoutManager.buildAll();
+
   const track = Tracks45v.list()[0];
   if (!track) {
     throw new Error('No 4.5V shuttle track exists yet; seed the example config first.');

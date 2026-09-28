@@ -32,10 +32,34 @@ class Drv8833Channel {
    */
   async throw_(direction) {
     const [activePin, idlePin] = direction === 'a' ? [this.ain1, this.ain2] : [this.ain2, this.ain1];
-    idlePin.writeSync(0);
-    activePin.writeSync(1);
-    await new Promise((resolve) => setTimeout(resolve, this.moveDurationMs));
-    activePin.writeSync(0); // coast once thrown -- LEGO point motors self-latch
+    const activeName = direction === 'a' ? 'ain1' : 'ain2';
+    const idleName = direction === 'a' ? 'ain2' : 'ain1';
+    try {
+      console.log(
+        `[drv8833] driver=${this.driverNumber} ch=${this.channel}: throw_('${direction}') starting, ` +
+          `pulling ${activeName} high, duration=${this.moveDurationMs}ms`
+      );
+      idlePin.writeSync(0);
+      activePin.writeSync(1);
+      await new Promise((resolve) => setTimeout(resolve, this.moveDurationMs));
+      console.log(
+        `[drv8833] driver=${this.driverNumber} ch=${this.channel}: ${this.moveDurationMs}ms elapsed, coasting (${activeName} -> 0)`
+      );
+      activePin.writeSync(0); // coast once thrown -- LEGO point motors self-latch
+      console.log(`[drv8833] driver=${this.driverNumber} ch=${this.channel}: throw_('${direction}') complete`);
+    } catch (err) {
+      console.error(
+        `[drv8833] driver=${this.driverNumber} ch=${this.channel}: throw_('${direction}') FAILED: ${err.message}, ` +
+          `attempting to coast both pins to 0`
+      );
+      try {
+        this.ain1.writeSync(0);
+        this.ain2.writeSync(0);
+      } catch (coastErr) {
+        console.error(`[drv8833] driver=${this.driverNumber} ch=${this.channel}: coast cleanup also failed: ${coastErr.message}`);
+      }
+      throw err;
+    }
   }
 
   stop() {

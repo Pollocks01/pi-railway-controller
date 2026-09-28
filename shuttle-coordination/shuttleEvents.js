@@ -2,12 +2,13 @@
 
 const ObstacleSensor = require('../gpio/sensor');
 const runtimeState = require('../config/runtimeState');
-const { selectAndThrowRoute, oppositeEnd } = require('./junctionCoordinator');
+const { railwayEvents } = require('./eventBus');
+const { oppositeEnd } = require('./trackEnds');
+const { getJunctionEndGroup } = require('./junctionEndGroup');
 const { Shuttles } = require('../config/configStore');
 
 const sensorInstances = new Map(); // sensorId -> ObstacleSensor
 const sensorUnsubscribers = [];
-const inFlightRouteSelections = new Map(); // shuttleTrackId -> Promise chain
 
 function assertShuttleAssignedForTrack(shuttleTrackId) {
   const hasAssignedShuttle = Shuttles.list().some((s) => s.shuttle_track_id === shuttleTrackId);
@@ -19,11 +20,31 @@ function assertShuttleAssignedForTrack(shuttleTrackId) {
 }
 
 /**
+ * Tears down every currently-registered location sensor: unwatches and
+ * unexports its GPIO pin and drops its trigger/clear handlers. Mirrors
+ * TrackController.destroy()'s handling of its own sensors -- called once,
+ * before re-registering, on every layoutManager.buildAll() so a location
+ * sensor that survives a config-edit rebuild gets exactly one listener,
+ * never a second one layered on top of the first.
+ */
+function teardownLocationSensors() {
+  for (const sensor of sensorInstances.values()) {
+    try {
+      sensor.destroy();
+    } catch (err) {
+      console.error(`[shuttleEvents] failed to tear down location sensor ${sensor.sensorNumber}:`, err.message);
+    }
+  }
+  sensorInstances.clear();
+  sensorUnsubscribers.length = 0;
+}
+
+/**
  * Wires up the two 'location' sensors at either end of a shuttle line so
  * the Pi always knows which end the shuttle is approaching/sitting at,
  * independent of anything the shuttle itself reports.
  *
- * Two distinct pieces of state come out of this, deliberately kept
+ * Two distinct pieces of state come out of a trigger, deliberately kept
  * separate:
  *  - `lastKnownEnd` -- the last end the shuttle was seen at. Persists
  *    across a departure (never reset on the clear edge), because it's
@@ -34,39 +55,104 @@ function assertShuttleAssignedForTrack(shuttleTrackId) {
  *    un-blocks (train has pulled away). Purely for accurate live status
  *    (e.g. the UI's end-of-line indicator) -- nothing routing-critical
  *    depends on it.
+ *
+ * On a trigger (arrival), this ALSO emits a 'track:arrived' event on the
+ * shared bus (eventBus.js) -- and that's the full extent of what this
+ * function knows about junctions. It doesn't know which junctions exist,
+ * how many there are, or what they should do; that's entirely up to
+ * whichever JunctionEndGroup (junctionEndGroup.js) is listening for
+ * arrivals on this track.
+ *
+ * On a clear (departure) this only updates `occupiedEnd`. It used to also
+ * reset the OPPOSITE end's junctions back to 'through' here -- that was
+ * the actual bug behind "the junction only throws once and then stops
+ * responding": the reset fired on every departure, racing against (and
+ * reliably beating) the arrival that had just set the opposite end's
+ * junction moments earlier for the very leg the shuttle was now running,
+ * so by the time the shuttle got there the junction had already been put
+ * back. Junction state is now only ever touched by an arrival at the end
+ * that determines it (JunctionEndGroup.throwRoute already resets any
+ * stale choice at that end before throwing the new one) or a manual/home
+ * command -- nothing reacts to a departure any more.
+ *
+ * @param {object} shuttleTrackDetail
+ * @param {() => object} settingsProvider () => current Settings.getAll(),
+ *   read at wiring time for endOfLineSensorDebounceMs -- shared with the
+ *   12V 'length' track's end-of-line sensor (trackController.js), since
+ *   both play the same "drives junction routing at one end" role.
  */
-function setupLocationSensors(shuttleTrackDetail) {
+function setupLocationSensors(shuttleTrackDetail, settingsProvider) {
+  const debounceMs = settingsProvider().endOfLineSensorDebounceMs;
+
+  // Never trust a disk-persisted occupiedEnd across a restart -- a hard
+  // power-off can't know where the shuttle physically ended up, and a
+  // stale value here would permanently jam the arrival latch below (it
+  // would look identical to "already occupied", silently swallowing every
+  // future real arrival at whichever end the stale value happened to
+  // name, forever -- exactly a "one end's junction never moves" symptom).
+  // Start clean; the isBlocked() check per sensor below re-seeds it from
+  // whichever sensor is actually reading blocked right now, if any.
+  runtimeState.updateShuttleTrack(shuttleTrackDetail.id, { occupiedEnd: null });
+
   for (const sensorRow of shuttleTrackDetail.sensors) {
     if (sensorRow.role !== 'location') continue;
-    const sensor = new ObstacleSensor(sensorRow.sensor_number);
+    const sensor = new ObstacleSensor(sensorRow.sensor_number, { debounceMs });
     // Not part of ObstacleSensor itself (it's hardware-only, no config
     // awareness) -- tagged here so simulateLocationSensorTrigger/Clear()
     // can find which shuttle track to check for an assigned shuttle.
     sensor.shuttleTrackId = shuttleTrackDetail.id;
     sensorInstances.set(sensorRow.id, sensor);
 
-    const unsubTrigger = sensor.onTrigger(() => {
+    // Seed occupancy from whatever the sensor already reads right now --
+    // e.g. a shuttle resting at this end across a restart -- WITHOUT
+    // treating it as a fresh arrival. Nothing should route a junction just
+    // because the server (re)booted; only a later, real transition
+    // (a genuine departure, then a genuine arrival) should ever do that.
+    if (sensor.isBlocked()) {
       runtimeState.updateShuttleTrack(shuttleTrackDetail.id, {
         lastKnownEnd: sensorRow.end_of_line,
         occupiedEnd: sensorRow.end_of_line,
       });
+      console.log(`[shuttleEvents] ${shuttleTrackDetail.id}: ${sensorRow.end_of_line} end already occupied at startup -- seeding state, not routing`);
+    }
 
-      // Any arrival at an end must also throw the route at the opposite end,
-      // because that's the junction(s) the shuttle will actually meet next.
-      routeShuttleArrival(shuttleTrackDetail.id, sensorRow.end_of_line)
-        .catch((err) => {
-          console.error(
-            `[shuttleEvents] routeShuttleArrival failed for ${shuttleTrackDetail.id} after sensor ${sensorRow.id} triggered at ${sensorRow.end_of_line}:`,
-            err.message
-          );
-        });
+    const unsubTrigger = sensor.onTrigger(() => {
+      // Edge-triggered on OCCUPANCY, not just on the raw GPIO edge: a real
+      // new arrival can only happen after a real departure has cleared
+      // this end first (a shuttle can't "arrive" twice in a row at the
+      // same end without leaving in between). So if this end is already
+      // marked occupied, this trigger is sensor noise during the dwell --
+      // vibration, electrical interference from a nearby junction throw,
+      // whatever -- not a genuine second arrival, and must NOT re-route.
+      // This is what keeps routing correct even if debounce alone doesn't
+      // catch every spurious edge.
+      const current = runtimeState.ensureShuttleTrack(shuttleTrackDetail.id);
+      if (current.occupiedEnd === sensorRow.end_of_line) {
+        console.log(
+          `[shuttleEvents] ${shuttleTrackDetail.id}: ignoring repeat trigger at ${sensorRow.end_of_line} end -- ` +
+            `already occupied there, not a new arrival`
+        );
+        return;
+      }
+      console.log(`[shuttleEvents] ${shuttleTrackDetail.id}: ARRIVAL at ${sensorRow.end_of_line} end -- routing opposite end`);
+      runtimeState.updateShuttleTrack(shuttleTrackDetail.id, {
+        lastKnownEnd: sensorRow.end_of_line,
+        occupiedEnd: sensorRow.end_of_line,
+      });
+      railwayEvents.emit('track:arrived', {
+        trackKind: '45v',
+        trackId: shuttleTrackDetail.id,
+        end: sensorRow.end_of_line,
+      });
     });
     const unsubClear = sensor.onClear(() => {
       // Only clear if this end was the one marked occupied -- defensive
       // against an out-of-order edge from the other end's sensor, even
-      // though in practice only one end is ever occupied at a time.
+      // though in practice only one end is ever occupied at a time. Never
+      // routes anything -- see the big comment above setupLocationSensors.
       const current = runtimeState.ensureShuttleTrack(shuttleTrackDetail.id);
       if (current.occupiedEnd === sensorRow.end_of_line) {
+        console.log(`[shuttleEvents] ${shuttleTrackDetail.id}: departure from ${sensorRow.end_of_line} end -- no junction action`);
         runtimeState.updateShuttleTrack(shuttleTrackDetail.id, { occupiedEnd: null });
       }
     });
@@ -75,40 +161,21 @@ function setupLocationSensors(shuttleTrackDetail) {
 }
 
 /**
- * Any time a shuttle is seen arriving at an end via obstacle sensor, the Pi
- * must throw the junction(s) at the opposite end: that's the route the shuttle
- * will hit once it reverses and heads back the other way.
- *
- * This is called ONLY when the physical obstacle sensor at the end is triggered.
- * The shuttle's "stopped" event is NOT routed here -- junctions are driven by
- * obstacle sensor arrivals, which are present on both 4.5V and 12V subsystems.
+ * Compatibility helper for diagnostics/tests: emits the same
+ * 'track:arrived' event a real sensor trigger would, then waits for
+ * whichever JunctionEndGroup owns the opposite (target) end to finish its
+ * throw, and returns the outcome. Live sensor wiring above does NOT use
+ * this -- it emits and moves on, fire-and-forget, exactly as before.
+ * @param {string} shuttleTrackId
+ * @param {'east'|'west'} arrivedAtEnd
  */
 async function routeShuttleArrival(shuttleTrackId, arrivedAtEnd) {
   assertShuttleAssignedForTrack(shuttleTrackId);
   const targetEnd = oppositeEnd(arrivedAtEnd);
-
-  // Queue per-track work so if multiple sensors trigger in quick succession,
-  // we process each route selection in order without dropping events.
-  const previous = inFlightRouteSelections.get(shuttleTrackId) || Promise.resolve();
-  const routePromise = previous.then(async () => {
-    const result = await selectAndThrowRoute('45v', shuttleTrackId, targetEnd);
-    return {
-      ok: true,
-      arrivedAtEnd,
-      targetEnd,
-      ...result,
-    };
-  });
-
-  inFlightRouteSelections.set(shuttleTrackId, routePromise);
-
-  try {
-    return await routePromise;
-  } finally {
-    if (inFlightRouteSelections.get(shuttleTrackId) === routePromise) {
-      inFlightRouteSelections.delete(shuttleTrackId);
-    }
-  }
+  railwayEvents.emit('track:arrived', { trackKind: '45v', trackId: shuttleTrackId, end: arrivedAtEnd });
+  const group = getJunctionEndGroup('45v', shuttleTrackId, targetEnd);
+  const result = group ? await group.waitForIdle() : { chosenJunctionId: null, chosenJunctionName: null };
+  return { ok: true, arrivedAtEnd, targetEnd, ...result };
 }
 
 /**
@@ -169,6 +236,7 @@ function simulateLocationSensorClear(sensorId) {
 
 module.exports = {
   setupLocationSensors,
+  teardownLocationSensors,
   handleStoppedEvent,
   routeShuttleArrival,
   findShuttleByRequestIp,

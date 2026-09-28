@@ -1,8 +1,9 @@
 'use strict';
 
-const { Tracks12v, Tracks45v, Signals, Settings, Zones, Sensors } = require('../config/configStore');
+const { Tracks12v, Tracks45v, Signals, Settings, Zones, Sensors, Junctions } = require('../config/configStore');
 const { TrackController } = require('../pi-track-control/trackController');
-const { setupLocationSensors } = require('../shuttle-coordination/shuttleEvents');
+const { setupLocationSensors, teardownLocationSensors } = require('../shuttle-coordination/shuttleEvents');
+const { ensureGroups, teardownAllGroups } = require('../shuttle-coordination/junctionEndGroup');
 
 const trackControllers = new Map(); // 12V trackId -> TrackController
 
@@ -27,9 +28,29 @@ function buildAll() {
     trackControllers.set(trackRow.id, controller);
   }
 
+  // Same "destroy what's running before rebuilding" rule as the 12V
+  // controllers above -- without this, every buildAll() (triggered by any
+  // 45V/12V/signal config change) piles a new listener onto a location
+  // sensor that already has one, instead of replacing it.
+  teardownLocationSensors();
+
   for (const shuttleTrackRow of Tracks45v.list()) {
     const detail = Tracks45v.withDetail(shuttleTrackRow.id);
-    setupLocationSensors(detail);
+    setupLocationSensors(detail, () => Settings.getAll());
+  }
+
+  // JunctionEndGroups: one per (track, end) that has a junction
+  // configured, across both 12V 'length' tracks and 4.5V shuttle lines --
+  // same "destroy what's running, then rebuild fresh" rule as everything
+  // else in this function. Each group self-registers on the shared event
+  // bus (eventBus.js) and reacts to arrivals on its own; nothing here
+  // wires a sensor directly to a junction any more.
+  teardownAllGroups();
+  for (const trackRow of Tracks12v.list()) {
+    ensureGroups('12v', trackRow.id, Junctions.listForTrack('12v', trackRow.id));
+  }
+  for (const shuttleTrackRow of Tracks45v.list()) {
+    ensureGroups('45v', shuttleTrackRow.id, Junctions.listForTrack('45v', shuttleTrackRow.id));
   }
 
   console.log(
