@@ -239,8 +239,16 @@ scripts/smoke-test-shuttle-arrival-routing.js    Backend-only; `npm run
                                   routes the junction at the opposite end.
 scripts/smoke-test-shuttle-route-stability.js    Backend-only; `npm run
                                   test:shuttle-route-stability-smoke` --
-                                  checks stale diverging junction state
-                                  gets reset across alternating arrivals.
+                                  checks round-robin selection rotates
+                                  across an end's junctions and a throw
+                                  never disturbs an unselected one.
+scripts/smoke-test-shuttle-junction-multilap.js  Backend-only; `npm run
+                                  test:shuttle-junction-multilap-smoke` --
+                                  runs several simulated laps, checking a
+                                  departure never moves a junction and every
+                                  arrival toggles its selected junction
+                                  (through <-> diverging), not just the
+                                  first one.
 server.js               Entry point
 ```
 
@@ -280,10 +288,16 @@ day-1 target):
   -- that's the one the shuttle will actually encounter once it reverses.
   Junction routing is driven by obstacle sensor arrivals only (both 4.5V and
   12V systems work this way). The shuttle's "stopped" event is just a simple
-  acknowledgment; it doesn't trigger routing. When a configured junction
-  exists at the target end, the Pi now chooses that
-  route rather than randomly falling back to the main line and leaving the
-  switch in the THROUGH position.
+  acknowledgment; it doesn't trigger routing. An end's junction(s) are
+  handled by round-robin: with one junction (today's actual layout) it
+  simply toggles that junction between THROUGH and DIVERGING on every
+  arrival; with 2+ junctions configured at an end, each arrival selects the
+  next one in rotation and toggles *that* junction, leaving every other
+  junction at the end exactly as it was. There's no hardware position
+  feedback, so every junction is assumed THROUGH at boot (see
+  `homeAllJunctions`) and toggled from there -- if a point physically drifts
+  out of sync during a show, that's corrected by hand, not detected in
+  software.
 
 To add a second shuttle line, more zones, more junctions per end, etc.,
 either extend the seed script or use the config API directly (see route
@@ -323,11 +337,16 @@ checking against the real breakout board before wiring anything up:
 
 Also placeholder/needs-verification: junction `move_duration_ms` (default
 350ms -- the real LEGO 19802 switch motor spec calls for ~200ms at nominal
-9-12V, but this layout runs its DRV8833 VM off an ~8V buck converter, so
-the default is set higher to give the lower-torque motor enough time to
-fully throw; there's no position feedback assumed, so this is a timed
-pulse, not a held voltage -- tune per-junction via the "Move duration (ms)"
-field on the Add Junction dialog if a specific motor is still unreliable),
+9-12V; there's no position feedback assumed, so this is a timed pulse, not
+a held voltage -- tune per-junction via the "Move duration (ms)" field on
+the Add Junction dialog if a specific motor is still unreliable). **Buck
+converter voltage matters more than pulse duration**: running the DRV8833
+VM at ~8.2V left junctions occasionally not throwing at all (not just
+slow) -- not enough torque at that voltage, no amount of extra pulse time
+fixes a torque shortfall. Raising the buck converter to 9V (still well
+within the DRV8833's 10V max input) fixed it outright. If a junction or
+signal ever seems to "try" to move but doesn't, check supply voltage
+before reaching for move_duration_ms.
 and the buck-converter output feeding the DRV8833 (brief says ~9V, measured
 ~8V in practice).
 

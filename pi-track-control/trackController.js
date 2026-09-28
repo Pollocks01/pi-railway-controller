@@ -7,7 +7,7 @@ const SpeedRamp = require('./ramp');
 const { StationStateMachine } = require('./stationStateMachine');
 const { sliderToMotor } = require('./speedMapping');
 const runtimeState = require('../config/runtimeState');
-const { selectAndThrowRoute, oppositeEnd } = require('../shuttle-coordination/junctionCoordinator');
+const { railwayEvents } = require('../shuttle-coordination/eventBus');
 
 const MODE = Object.freeze({ MANUAL: 'MANUAL', CONTINUE: 'CONTINUE', SHUTTLE: 'SHUTTLE' });
 
@@ -45,6 +45,16 @@ class TrackController {
   }
 
   _buildHardware(trackDetail) {
+    // Never trust a disk-persisted occupiedEnd across a restart -- a hard
+    // power-off can't know where a train physically ended up, and a stale
+    // value here would permanently jam the end-of-line arrival latch below
+    // (it would look identical to "already occupied", silently swallowing
+    // every future real arrival at whichever end the stale value happened
+    // to name, forever -- exactly the "one end's junction never moves"
+    // symptom). Start clean; the isBlocked() check per end-of-line sensor
+    // below re-seeds it from whatever's actually reading blocked right now.
+    runtimeState.updateTrack12vEnd(this.trackId, { occupiedEnd: null });
+
     for (const zone of this.zonesConfig) {
       const driver = new Drv8871(zone.driver_number);
       this.zoneDrivers.set(zone.id, driver);
@@ -61,7 +71,15 @@ class TrackController {
       );
 
       for (const sensorRow of zone.sensors) {
-        const debounceMs = this.settingsProvider().track12vSensorDebounceMs;
+        // An end-of-line sensor drives junction routing (see below), same
+        // role as the 4.5V shuttle line's location sensor, so it shares
+        // that setting instead of the shorter block-entry/station one --
+        // a train can flicker an end-of-line sensor for well over a second
+        // while coming to a stop against it, which would otherwise re-fire
+        // 'track:arrived' and re-toggle the opposite end's junction several
+        // times per real arrival.
+        const settings = this.settingsProvider();
+        const debounceMs = sensorRow.role === 'end-of-line' ? settings.endOfLineSensorDebounceMs : settings.track12vSensorDebounceMs;
         const sensor = new ObstacleSensor(sensorRow.sensor_number, { debounceMs });
         // Not part of ObstacleSensor itself (hardware-only, no config
         // awareness) -- tagged here so simulateSensorTrigger() knows which
@@ -82,6 +100,15 @@ class TrackController {
         // role the 4.5V shuttle line's location sensors play, independent of
         // which edge (leading/trailing) drives the station stop/dwell above.
         if (sensorRow.role === 'end-of-line' && sensorRow.end_of_line) {
+          // Seed occupancy from whatever the sensor already reads right now
+          // -- e.g. a train resting at this end across a restart -- WITHOUT
+          // treating it as a fresh arrival. Nothing should route a junction
+          // just because the server (re)booted; see the matching comment in
+          // shuttleEvents.js's setupLocationSensors (same role, same fix).
+          if (sensor.isBlocked()) {
+            runtimeState.updateTrack12vEnd(this.trackId, { lastKnownEnd: sensorRow.end_of_line, occupiedEnd: sensorRow.end_of_line });
+            console.log(`[trackController] track ${this.trackId}: ${sensorRow.end_of_line} end already occupied at startup -- seeding state, not routing`);
+          }
           const unsubArrive = sensor.onTrigger(() => this._handleEndOfLineArrival(sensorRow.end_of_line));
           const unsubDepart = sensor.onClear(() => this._handleEndOfLineDeparture(sensorRow.end_of_line));
           this._sensorUnsubscribers.push(unsubArrive, unsubDepart);
@@ -186,16 +213,30 @@ class TrackController {
 
   /**
    * Mirrors shuttleEvents.js's location-sensor arrival handling: record
-   * which end the train is at, then throw the OPPOSITE end's junctions --
-   * that's the route the train will actually meet once it reverses back
-   * out. Fire-and-forget (matches the 4.5V pattern), since arrival must
-   * not block the sensor's own station-stop handling above.
+   * which end the train is at, then emit a 'track:arrived' event on the
+   * shared bus (eventBus.js) -- whichever JunctionEndGroup owns the
+   * opposite end of this track (junctionEndGroup.js) picks that up and
+   * throws its own junction(s) for the leg the train is about to run.
+   * This controller doesn't know or care which/how many junctions exist;
+   * same event, same bus, same JunctionEndGroup class the 4.5V shuttle
+   * line uses. Emitting is synchronous and non-blocking, so it can't
+   * hold up the sensor's own station-stop handling above.
    */
   _handleEndOfLineArrival(end) {
+    // Edge-triggered on OCCUPANCY, not just the raw GPIO edge -- a real new
+    // arrival can only happen after a real departure clears this end first,
+    // so a repeat trigger while already marked occupied is sensor noise
+    // during the dwell (vibration, motor EMI from a nearby junction throw),
+    // not a genuine second arrival, and must NOT re-route. Same fix as
+    // shuttleEvents.js's location-sensor trigger handler.
+    const current = runtimeState.ensure12vTrack(this.trackId);
+    if (current.occupiedEnd === end) {
+      console.log(`[trackController] track ${this.trackId}: ignoring repeat trigger at ${end} end -- already occupied there, not a new arrival`);
+      return;
+    }
+    console.log(`[trackController] track ${this.trackId}: ARRIVAL at ${end} end -- routing opposite end`);
     runtimeState.updateTrack12vEnd(this.trackId, { lastKnownEnd: end, occupiedEnd: end });
-    selectAndThrowRoute('12v', this.trackId, oppositeEnd(end)).catch((err) => {
-      console.error(`[trackController] junction routing failed for track ${this.trackId} after arrival at ${end}:`, err.message);
-    });
+    railwayEvents.emit('track:arrived', { trackKind: '12v', trackId: this.trackId, end });
   }
 
   /** Mirrors shuttleEvents.js's location-sensor departure handling: clear live occupancy once the train pulls away. */

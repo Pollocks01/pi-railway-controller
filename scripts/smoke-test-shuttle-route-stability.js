@@ -1,10 +1,33 @@
 'use strict';
 
+/**
+ * Regression test for JunctionEndGroup.throwRoute()'s selection when an end
+ * has 2+ junctions configured (e.g. two sidings to alternate between).
+ * Asserts:
+ *  - successive arrivals at the same end round-robin across its junctions
+ *    rather than repeatedly picking the same one;
+ *  - a throw only ever moves the ONE junction it selected -- every other
+ *    junction at that end (and the whole opposite end) is left exactly as
+ *    it was, since each junction now tracks and toggles its own position
+ *    independently rather than one throw forcing the rest back to
+ *    'through'.
+ */
+
 const runtimeState = require('../config/runtimeState');
 const { Tracks45v, Junctions } = require('../config/configStore');
 const { routeShuttleArrival } = require('../shuttle-coordination/shuttleEvents');
+const layoutManager = require('../api/layoutManager');
+
+function position(junctionId) {
+  return runtimeState.snapshot().junctions[junctionId]?.position || 'through';
+}
 
 async function main() {
+  // Build the layout first, same as server.js does at boot -- this is
+  // what registers the JunctionEndGroup(s) that routeShuttleArrival's
+  // compat wrapper looks up.
+  layoutManager.buildAll();
+
   const track = Tracks45v.list()[0];
   if (!track) {
     throw new Error('No 4.5V shuttle track exists yet; seed the example config first.');
@@ -12,59 +35,72 @@ async function main() {
 
   const trackJunctions = Junctions.listForTrack('45v', track.id);
   if (trackJunctions.length < 2) {
-    throw new Error(`Need at least 2 configured junctions on track ${track.id} to test stale-state reset.`);
+    throw new Error(`Need at least 2 configured junctions on track ${track.id} to test round-robin selection.`);
   }
 
   for (const junction of trackJunctions) {
-    runtimeState.updateJunction(junction.id, { position: 'diverging', moving: false });
+    runtimeState.updateJunction(junction.id, { position: 'through', moving: false });
   }
 
-  const westArrival = await routeShuttleArrival(track.id, 'west');
-  const afterWest = runtimeState.snapshot().junctions;
-  const westTarget = Junctions.listForEnd('45v', track.id, 'east');
-  const westChosen = westTarget.find((j) => j.id === westArrival.chosenJunctionId);
+  const westEndJunctionsBefore = trackJunctions
+    .filter((j) => j.end === 'west')
+    .map((j) => ({ id: j.id, position: position(j.id) }));
 
-  if (!westChosen) {
-    throw new Error(`Expected a chosen junction on the east side for west arrival, got ${westArrival.chosenJunctionId}`);
+  // First west arrival -> throws at the east (opposite) end.
+  const firstArrival = await routeShuttleArrival(track.id, 'west');
+  const eastTarget = Junctions.listForEnd('45v', track.id, 'east');
+  const firstChosen = eastTarget.find((j) => j.id === firstArrival.chosenJunctionId);
+  if (!firstChosen) {
+    throw new Error(`Expected a chosen junction on the east side for west arrival, got ${firstArrival.chosenJunctionId}`);
+  }
+  if (position(firstChosen.id) !== 'diverging') {
+    throw new Error(`chosen junction "${firstChosen.name}" should have toggled through -> diverging, got ${position(firstChosen.id)}`);
+  }
+  const untouchedAfterFirst = eastTarget.filter((j) => j.id !== firstChosen.id).some((j) => position(j.id) !== 'through');
+  if (untouchedAfterFirst) {
+    throw new Error('a non-selected east-side junction moved on a west arrival; only the round-robin-selected junction should move.');
+  }
+  const westUntouchedAfterFirst = westEndJunctionsBefore.some(({ id, position: before }) => position(id) !== before);
+  if (westUntouchedAfterFirst) {
+    throw new Error('a west-side junction moved on a west arrival; only the opposite (target) end should ever be touched.');
   }
 
-  // Only the target end (east, opposite of this west arrival) gets reset --
-  // the west-end junction the train just used to arrive must be left alone.
-  const staleOnEastTarget = westTarget.filter((j) => j.id !== westChosen.id).some((j) => afterWest[j.id]?.position !== 'through');
-  if (staleOnEastTarget) {
-    throw new Error('a non-chosen east-side junction stayed diverging after a west arrival; stale route state was not cleared.');
-  }
-  const westEndUntouched = trackJunctions.filter((j) => j.end === 'west').every((j) => afterWest[j.id]?.position === 'diverging');
-  if (!westEndUntouched) {
-    throw new Error('west-side junction was touched by a west arrival; only the opposite (target) end should be thrown.');
+  if (eastTarget.length < 2) {
+    console.log(
+      'route stability check passed (single junction at east end -- round-robin selection has nothing further to rotate through).'
+    );
+    return;
   }
 
-  const eastEndBeforeSecondArrival = trackJunctions.filter((j) => j.end === 'east').map((j) => ({ id: j.id, position: afterWest[j.id]?.position }));
-
-  const eastArrival = await routeShuttleArrival(track.id, 'east');
-  const afterEast = runtimeState.snapshot().junctions;
-  const eastTarget = Junctions.listForEnd('45v', track.id, 'west');
-  const eastChosen = eastTarget.find((j) => j.id === eastArrival.chosenJunctionId);
-
-  if (!eastChosen) {
-    throw new Error(`Expected a chosen junction on the west side for east arrival, got ${eastArrival.chosenJunctionId}`);
+  // Second west arrival -> round-robin should now pick a DIFFERENT east
+  // junction, and it must not disturb the one the first arrival chose.
+  const secondArrival = await routeShuttleArrival(track.id, 'west');
+  const secondChosen = eastTarget.find((j) => j.id === secondArrival.chosenJunctionId);
+  if (!secondChosen) {
+    throw new Error(`Expected a chosen junction on the east side for the second west arrival, got ${secondArrival.chosenJunctionId}`);
+  }
+  if (secondChosen.id === firstChosen.id) {
+    throw new Error(
+      `round-robin selected the same junction ("${firstChosen.name}") twice in a row for consecutive west arrivals -- ` +
+        `it should rotate to the next one.`
+    );
+  }
+  if (position(secondChosen.id) !== 'diverging') {
+    throw new Error(`chosen junction "${secondChosen.name}" should have toggled through -> diverging, got ${position(secondChosen.id)}`);
+  }
+  if (position(firstChosen.id) !== 'diverging') {
+    throw new Error(
+      `previously-selected junction "${firstChosen.name}" moved on a later arrival that didn't select it -- ` +
+        `unselected junctions must be left untouched.`
+    );
   }
 
-  // Only the target end (west, opposite of this east arrival) gets reset --
-  // the east-end junction the train just used to arrive must be left alone.
-  const staleOnWestTarget = eastTarget.filter((j) => j.id !== eastChosen.id).some((j) => afterEast[j.id]?.position !== 'through');
-  if (staleOnWestTarget) {
-    throw new Error('a non-chosen west-side junction stayed diverging after an east arrival; stale route state was not cleared.');
-  }
-  const eastEndUntouched = eastEndBeforeSecondArrival.every(({ id, position }) => afterEast[id]?.position === position);
-  if (!eastEndUntouched) {
-    throw new Error('east-side junction position changed unexpectedly for an east arrival; only the opposite (target) end should be thrown.');
-  }
-
-  console.log('stability check passed: route selection cleared stale target-end junction state without touching the arrival end.');
+  console.log('route stability check passed: round-robin rotates across junctions, and a throw never disturbs an unselected one.');
 }
 
-main().catch((err) => {
-  console.error('shuttle route stability smoke test failed:', err.message);
-  process.exit(1);
-});
+main()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error('shuttle route stability smoke test failed:', err.message);
+    process.exit(1);
+  });

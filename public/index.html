@@ -137,6 +137,14 @@
           </fieldset>
 
           <fieldset class="network-fieldset">
+            <legend>End-of-line / location sensors</legend>
+            <label class="field-label">Debounce (ms)
+              <input type="number" id="settingsEndOfLineSensorDebounceMs" min="0" step="100">
+            </label>
+            <span class="hint-inline">Shared by a 12V length track's end-of-line sensor and a 4.5V shuttle line's location sensor. A slow train/shuttle can flicker the beam for well over a second while passing; raise this if the opposite end's junction toggles more than once per real arrival.</span>
+          </fieldset>
+
+          <fieldset class="network-fieldset">
             <legend>Signal LEDs</legend>
             <label class="field-label">Brightness (%)
               <input type="number" id="settingsSignalBrightnessPercent" min="0" max="100" step="1">

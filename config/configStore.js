@@ -200,7 +200,7 @@ const Junctions = {
   },
   listForEnd(trackKind, trackId, end) {
     return db
-      .prepare('SELECT * FROM junctions WHERE track_kind = ? AND track_id = ? AND end = ?')
+      .prepare('SELECT * FROM junctions WHERE track_kind = ? AND track_id = ? AND end = ? ORDER BY name')
       .all(trackKind, trackId, end);
   },
   get(id) {
@@ -415,6 +415,20 @@ const DEFAULT_SETTINGS = {
   // Shared by 12V and 4.5V junction motors (same DRV8833 hardware/pulse
   // model either way).
   junctionDefaultMoveDurationMs: 350,
+  // Debounce for whichever IR sensor drives junction routing at the end of
+  // a point-to-point line -- a 12V 'length' track's 'end-of-line' sensor
+  // (trackController.js, overriding track12vSensorDebounceMs for that one
+  // role) and a 4.5V shuttle line's 'location' sensor (shuttleEvents.js)
+  // play the exact same part, so they share this one setting rather than
+  // each track kind getting its own knob. Deliberately separate from
+  // shuttle45vHallDebounceMs below, which is pushed to the shuttle's own
+  // onboard hall sensor, not read by the Pi. A slow-moving train/shuttle's
+  // body can flicker the beam for well over a second while passing (gaps
+  // between couplings/bogies), which was re-firing 'track:arrived' and
+  // re-toggling the opposite end's junction several times per real
+  // arrival; long enough to cover that, short enough not to eat a
+  // deliberately quick pass.
+  endOfLineSensorDebounceMs: 3000,
 
   // ---- 4.5V shuttle settings (pushed down to shuttles' own /config) ----
   // The Pi is the single source of truth for these -- each shuttle is a

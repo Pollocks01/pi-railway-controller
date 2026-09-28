@@ -13,7 +13,8 @@
     "test:ui-smoke": "node scripts/smoke-test-ui.js",
     "test:authoring-smoke": "node scripts/smoke-test-authoring.js",
     "test:shuttle-arrival-smoke": "node scripts/smoke-test-shuttle-arrival-routing.js",
-    "test:shuttle-route-stability-smoke": "node scripts/smoke-test-shuttle-route-stability.js"
+    "test:shuttle-route-stability-smoke": "node scripts/smoke-test-shuttle-route-stability.js",
+    "test:shuttle-junction-multilap-smoke": "node scripts/smoke-test-shuttle-junction-multilap.js"
   },
   "license": "MIT",
   "dependencies": {

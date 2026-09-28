@@ -427,6 +427,7 @@ async function initSettingsPanel() {
     ['settingsTrain12vMinMotorPercent', 'track12vMinMotorPercent'],
     ['settingsTrain12vMaxMotorPercent', 'track12vMaxMotorPercent'],
     ['settingsJunctionDefaultMoveDurationMs', 'junctionDefaultMoveDurationMs'],
+    ['settingsEndOfLineSensorDebounceMs', 'endOfLineSensorDebounceMs'],
     ['settingsSignalBrightnessPercent', 'signalBrightnessPercent'],
     ['settingsContinueModeProbabilityPercentMin', 'track12vContinueModeProbabilityPercentMin'],
     ['settingsContinueModeProbabilityPercentMax', 'track12vContinueModeProbabilityPercentMax'],
